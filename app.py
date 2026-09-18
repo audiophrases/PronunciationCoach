@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 
 import gradio as gr
 
@@ -17,7 +19,27 @@ from pronunciationcoach.viz import posterior_heatmap
 
 log = setup_logging()
 COLORS = {"good": "#2e8b57", "unsure": "#e0a800", "off": "#c0392b"}
-L1_OPTIONS = ["Spanish", "Catalan", "Other / unknown"]  # plumbed through for the next stage; unused today
+L1_OPTIONS = ["Catalan", "Spanish", "Other / unknown"]  # plumbed through for the next stage; unused today
+DEFAULT_L1 = os.environ.get("PC_L1", "Catalan")
+if DEFAULT_L1 not in L1_OPTIONS:
+    raise ValueError(f"PC_L1 must be one of {L1_OPTIONS}, got {DEFAULT_L1!r}")
+
+
+
+def english_ui() -> gr.I18n:
+    """Keep Gradio's own widget labels ("Record", "Submit", ...) in English.
+
+    Gradio localises them from the browser's language and has no off switch, but
+    custom translations given as flat "section.key" strings take precedence over
+    its built-in dictionaries. So the English strings are registered as the
+    translation for every other locale. Regenerate the JSON after a Gradio
+    upgrade with scripts/extract_gradio_strings.py.
+    """
+    data = json.loads((Path(__file__).parent / "pronunciationcoach" / "gradio_ui_english.json").read_text(encoding="utf-8"))
+    if data["gradio_version"] != gr.__version__:
+        log.warning("gradio_ui_english.json was made for Gradio %s, running %s", data["gradio_version"], gr.__version__)
+    translations = {locale: data["strings"] for locale in data["locales"]}
+    return gr.I18n(**translations)
 
 
 def run(audio, text, accent_name, l1):
@@ -81,7 +103,7 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
             text = gr.Textbox(label="Sentence (leave empty for free speech)", lines=2)
             with gr.Row():
                 accent = gr.Dropdown(list(ACCENTS), value=DEFAULT_ACCENT, label="Target accent")
-                l1 = gr.Dropdown(L1_OPTIONS, value="Spanish", label="Learner's first language")
+                l1 = gr.Dropdown(L1_OPTIONS, value=DEFAULT_L1, label="Learner's first language")
             button = gr.Button("Assess", variant="primary")
         with gr.Column(scale=2):
             summary = gr.Textbox(label="What was said", lines=5)
@@ -104,6 +126,7 @@ if __name__ == "__main__":
         DEFAULT_MODEL, DEFAULT_ASR, DEFAULT_ACCENT, DEBUG, SAVE_RECORDINGS, LOG_FILE,
     )
     demo.queue(default_concurrency_limit=1).launch(
+        i18n=english_ui(),
         show_error=True,
         server_name=os.environ.get("GRADIO_SERVER_NAME", "127.0.0.1"),
         server_port=int(os.environ.get("GRADIO_SERVER_PORT", "7860")),

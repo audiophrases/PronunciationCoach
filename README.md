@@ -48,8 +48,12 @@ The app always writes one line per assessment to `logs\app.log` (mode, text, wha
 phones, timings) plus any errors. Archived recordings can be replayed by dragging the `.wav` onto
 `score_recording.bat`.
 
-Preferences live at the top of `launchers\_env.bat`: `PC_ACCENT` (General **American** by default, or `British`)
-and `PC_ASR_MODEL` (Whisper size for free speech).
+Preferences live at the top of `launchers\_env.bat`: `PC_ACCENT` (General **American** by default, or `British`),
+`PC_L1` (learner's first language shown by default: **Catalan**) and `PC_ASR_MODEL` (Whisper size for free speech).
+
+The interface is always in English, whatever the browser's language. Gradio normally translates its own
+buttons ("Record" → "Gravar"); `pronunciationcoach/gradio_ui_english.json` overrides that for every
+locale Gradio ships. After upgrading Gradio, regenerate it with `uv run python scripts/extract_gradio_strings.py`.
 
 ## Run from a terminal
 
