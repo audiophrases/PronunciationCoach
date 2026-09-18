@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Local tooling state
+.codegraph/
+.env
+
+# Model weights and caches are downloaded on demand, never committed
+.cache/
+models/
+
+# Audio produced by smoke tests / recordings from the UI
+tmp/
+recordings/
+*.wav
+*.webm
+*.ogg
+*.mp3
+*.flac
+!tests/fixtures/*.wav
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
