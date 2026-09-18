@@ -14,6 +14,7 @@ rem and every recording archived in recordings\ (wav + json) so it can be replay
 rem by dragging the wav onto score_recording.bat.
 set "PC_DEBUG=1"
 set "PC_SAVE_RECORDINGS=1"
+call "%~dp0_free_port.bat"
 set "PC_OPEN_BROWSER=1"
 
 echo Starting Pronunciation Coach in DEBUG mode.

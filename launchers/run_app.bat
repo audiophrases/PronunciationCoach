@@ -9,6 +9,7 @@ where uv >nul 2>&1 || (
     exit /b 1
 )
 
+call "%~dp0_free_port.bat"
 set "PC_OPEN_BROWSER=1"
 echo Starting Pronunciation Coach ...
 echo The browser opens by itself when the server is ready (first start takes a while: models are loading).
