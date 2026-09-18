@@ -62,3 +62,17 @@ def test_score_words_groups_phones_by_word():
     words = score_words(em, segs, [("ab", 2), ("c", 1)])
     assert [(w.word, [p.expected for p in w.phones]) for w in words] == [("ab", ["a", "b"]), ("c", ["c"])]
     assert all(w.category == "good" for w in words)
+
+
+def test_equivalent_variants_are_not_penalised():
+    from pronunciationcoach.scoring import equivalents
+
+    assert equivalents("ɐ") == {"ə", "ɐ", "ᵻ"} and equivalents("t") == {"t"}
+    labels = ["<pad>", "ə", "ɐ", "t"]
+    probs = np.array([[0.05, 0.69, 0.25, 0.01]], dtype=np.float32)
+    em = Emissions(np.log(probs), labels, 0, 20.0)
+    seg = forced_align(em, [2])[0]  # expected ɐ, but the model prefers ə
+    score = score_segment(em, seg)
+    assert score.gop == pytest.approx(0.0)
+    assert score.heard == "ɐ"
+    assert score.posterior == pytest.approx((0.69 + 0.25) / 0.95, abs=1e-3)

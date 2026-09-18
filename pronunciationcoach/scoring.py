@@ -22,6 +22,22 @@ from .engine import Emissions
 GOP_GOOD = -0.5
 GOP_UNSURE = -2.0
 
+# Symbols the reference may write differently from what the recogniser reports, without
+# there being any pronunciation difference a teacher would flag. Each group is scored as
+# one sound: the expected phone gets the probability mass of the whole group and none of
+# the group counts as a competitor. Curated from real recordings; grows with the teacher.
+EQUIVALENT: list[set[str]] = [
+    {"ə", "ɐ", "ᵻ"},  # reduced central vowels: espeak's "a" (ɐ), "-ed" (ᵻ) and plain schwa
+    {"i", "iː"},  # happY vowel vs FLEECE: espeak marks length, speech in unstressed positions doesn't
+]
+
+
+def equivalents(phone: str) -> set[str]:
+    for group in EQUIVALENT:
+        if phone in group:
+            return group
+    return {phone}
+
 
 def category(gop: float) -> str:
     if gop >= GOP_GOOD:
@@ -66,24 +82,30 @@ class WordScore:
 
 def score_segment(em: Emissions, seg: Segment, top_k: int = 3) -> PhoneScore:
     block = em.log_probs[seg.start : seg.end]  # (n, C)
+    group = equivalents(seg.phone)
+    group_ids = [i for i, label in enumerate(em.labels) if label in group] or [seg.phone_id]
+
     competitors = block.copy()
     competitors[:, em.blank_id] = -np.inf
-    lp_expected = float(block[:, seg.phone_id].mean())
-    lp_best = float(competitors.max(axis=-1).mean())
-
     probs = np.exp(competitors)  # blank is now exactly 0
     mass = probs.sum(axis=-1, keepdims=True)
     mass[mass == 0] = 1.0
     mean_nb = (probs / mass).mean(axis=0)  # distribution over non-blank phones
     order = np.argsort(mean_nb)[::-1][:top_k]
 
+    # log P(any symbol of the group) per frame, then averaged; the group is not its own competitor.
+    lp_expected = float(np.logaddexp.reduce(block[:, group_ids], axis=-1).mean())
+    competitors[:, group_ids] = -np.inf
+    lp_best = float(competitors.max(axis=-1).mean())
+    top = int(order[0])
+
     return PhoneScore(
         expected=seg.phone,
         start_s=em.frame_to_s(seg.start),
         end_s=em.frame_to_s(seg.end),
-        gop=lp_expected - lp_best,
-        posterior=float(mean_nb[seg.phone_id]),
-        heard=em.labels[int(order[0])],
+        gop=min(0.0, lp_expected - lp_best),
+        posterior=float(mean_nb[group_ids].sum()),
+        heard=seg.phone if top in group_ids else em.labels[top],
         candidates=[(em.labels[int(i)], float(mean_nb[i])) for i in order],
     )
 
