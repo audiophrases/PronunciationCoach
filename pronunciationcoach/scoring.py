@@ -79,7 +79,7 @@ class PhoneScore:
 
     @property
     def category(self) -> str:
-        return category(self.gop)
+        return "off" if self.dropped else category(self.gop)  # a sound not said at all is always an error
 
 
 @dataclass

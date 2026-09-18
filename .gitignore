@@ -33,3 +33,6 @@ Thumbs.db
 
 # Runtime output
 logs/
+
+# Synthesised model pronunciations (regenerated on demand)
+tts_cache/

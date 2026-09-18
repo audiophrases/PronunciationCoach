@@ -37,6 +37,30 @@ class Assessment:
     def heard_text(self) -> str:
         return " ".join(s.phone for s in self.heard)
 
+    def word_spans(self, pad_before: float = 0.10, pad_after: float = 0.25) -> list[tuple[float, float]]:
+        """(start, end) in seconds of each word in the recording, for replaying it.
+
+        CTC marks a phone near its onset, so the last phone's span ends before the
+        sound does: pad after, but never into the next word. Dropped phones were
+        aligned somewhere arbitrary and are ignored when placing the word.
+        """
+        em = self.emissions
+        starts: list[float] = []
+        ends: list[float] = []
+        cursor = 0
+        for w in self.words:
+            segs = self.segments[cursor : cursor + len(w.phones)]
+            kept = [s for s, p in zip(segs, w.phones) if not p.dropped] or segs
+            starts.append(em.frame_to_s(min(s.start for s in kept)))
+            ends.append(em.frame_to_s(max(s.end for s in kept)))
+            cursor += len(w.phones)
+        spans = []
+        for i in range(len(starts)):
+            lo = max(starts[i] - pad_before, ends[i - 1] if i else 0.0, 0.0)
+            hi = min(ends[i] + pad_after, starts[i + 1] if i + 1 < len(starts) else self.duration_s, self.duration_s)
+            spans.append((lo, max(hi, lo + 0.05)))
+        return spans
+
     def extra_text(self, min_phones: int = 2) -> str:
         """Human-readable list of the extra runs, e.g. 'ɔ z ə z (7.5–8.4 s)'."""
         em = self.emissions

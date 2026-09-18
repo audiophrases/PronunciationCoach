@@ -1,4 +1,10 @@
-"""Gradio front end: record or upload, optionally type the sentence, see every phone scored."""
+"""Gradio front end.
+
+Learner view: the sentence with each word coloured, a plain-language summary,
+"you vs model" playback for the whole sentence and for any word you tap.
+Teacher view: everything technical (IPA, per-phone table, posterior heatmap)
+in a collapsed section underneath.
+"""
 
 from __future__ import annotations
 
@@ -8,22 +14,24 @@ from pathlib import Path
 
 import gradio as gr
 
+from pronunciationcoach import SAMPLE_RATE
 from pronunciationcoach.asr import DEFAULT_ASR
 from pronunciationcoach.audio import to_mono_16k
 from pronunciationcoach.engine import DEFAULT_MODEL
+from pronunciationcoach.feedback import BAND_COLOR, summary, word_feedback
 from pronunciationcoach.g2p import ACCENTS, DEFAULT_ACCENT
 from pronunciationcoach.logs import DEBUG, LOG_FILE, SAVE_RECORDINGS, log_assessment, setup_logging
 from pronunciationcoach.pipeline import assess
 from pronunciationcoach.scoring import GOP_GOOD, GOP_UNSURE
+from pronunciationcoach.tts import synthesize
 from pronunciationcoach.viz import posterior_heatmap
 
 log = setup_logging()
-COLORS = {"good": "#2e8b57", "unsure": "#e0a800", "off": "#c0392b"}
+IPA_COLORS = {"good": "#2e8b57", "unsure": "#e0a800", "off": "#c0392b"}
 L1_OPTIONS = ["Catalan", "Spanish", "Other / unknown"]  # plumbed through for the next stage; unused today
 DEFAULT_L1 = os.environ.get("PC_L1", "Catalan")
 if DEFAULT_L1 not in L1_OPTIONS:
     raise ValueError(f"PC_L1 must be one of {L1_OPTIONS}, got {DEFAULT_L1!r}")
-
 
 
 def english_ui() -> gr.I18n:
@@ -42,28 +50,64 @@ def english_ui() -> gr.I18n:
     return gr.I18n(**translations)
 
 
+def model_audio(text: str, lang: str, speed: str) -> str | None:
+    try:
+        return str(synthesize(text, lang, speed))
+    except Exception:
+        log.exception("could not synthesise %r", text)
+        return None
+
+
 def run(audio, text, accent_name, l1):
     if audio is None:
         log.warning("assess called without audio")
         raise gr.Error("Record or upload some audio first.")
     sr, samples = audio
+    lang = ACCENTS[accent_name]
     log.debug("request: sr=%d samples=%s text=%r accent=%s L1=%s", sr, getattr(samples, "shape", None), text, accent_name, l1)
     try:
-        result = assess(samples, sr, text, ACCENTS[accent_name])
+        result = assess(samples, sr, text, lang)
     except ValueError as exc:  # e.g. audio far too short for the sentence
         log.warning("assessment rejected: %s", exc)
         raise gr.Error(str(exc)) from exc
     except Exception as exc:
         log.exception("assessment failed")
         raise gr.Error(f"Something went wrong: {exc!r}. Details are in {LOG_FILE}") from exc
-    log_assessment(log, result, l1, to_mono_16k(samples, sr))
+    audio16k = to_mono_16k(samples, sr)
+    log_assessment(log, result, l1, audio16k)
 
-    highlighted = []
+    # --- learner view ---------------------------------------------------------
+    feedback = [word_feedback(w) for w in result.words]
+    words_hl: list[tuple[str, str | None]] = []
+    index_map: list[int | None] = []
+    for i, f in enumerate(feedback):
+        words_hl.append((f.word, f.band))
+        index_map.append(i)
+        words_hl.append((" ", None))
+        index_map.append(None)
+
+    text_md = summary(result.words)
+    if result.transcribed:
+        text_md = f"I heard: **{result.text}**\n\n" + text_md
+    if result.extra_text():
+        text_md += "\n\n_Some repeated or hesitated parts were ignored._"
+
+    state = {
+        "lang": lang,
+        "audio": audio16k,
+        "spans": result.word_spans(),
+        "feedback": feedback,
+        "index_map": index_map,
+        "expected": [[p.expected for p in w.phones] for w in result.words],
+        "heard": [[p.heard_label for p in w.phones] for w in result.words],
+    }
+
+    # --- teacher view ---------------------------------------------------------
+    ipa_hl = []
     for word in result.words:
         for p in word.phones:
-            highlighted.append((p.expected, p.category))
-        highlighted.append(("  ", None))
-
+            ipa_hl.append((p.expected, p.category))
+        ipa_hl.append(("  ", None))
     rows = [
         [
             word.word if i == 0 else "",
@@ -77,50 +121,98 @@ def run(audio, text, accent_name, l1):
         for word in result.words
         for i, p in enumerate(word.phones)
     ]
-
-    reference = ("Whisper heard: " if result.transcribed else "Reference: ") + result.text
-    if result.unknown_phones:
-        reference += f"\n(no model label for: {' '.join(result.unknown_phones)})"
     timing = "  ".join(f"{k} {v:.1f}s" for k, v in result.timings.items())
-    extra = result.extra_text()
-    summary = (
-        f"{reference}\n\nHeard, text-independent:  {result.heard_text}\n"
-        + (f"\nHeard but not in the sentence (repeats, hesitations):  {extra}\n" if extra else "")
-        + f"\n{result.duration_s:.1f} s of audio · {timing}"
+    tech = (
+        f"Reference{' (Whisper)' if result.transcribed else ''}: {result.text}\n"
+        f"Heard, text-independent: {result.heard_text}\n"
+        + (f"Heard but not in the sentence: {result.extra_text()}\n" if result.extra_text() else "")
+        + (f"No model label for: {' '.join(result.unknown_phones)}\n" if result.unknown_phones else "")
+        + f"{result.duration_s:.1f} s of audio · {timing}"
     )
     fig = posterior_heatmap(result.emissions, result.segments)
-    return summary, highlighted, rows, fig
+
+    return (
+        words_hl,
+        text_md,
+        (SAMPLE_RATE, audio16k),
+        model_audio(result.text, lang, "normal"),
+        model_audio(result.text, lang, "slow"),
+        state,
+        gr.update(visible=False),  # word panel hidden until a word is tapped
+        tech,
+        ipa_hl,
+        rows,
+        fig,
+    )
+
+
+def pick_word(evt: gr.SelectData, state):
+    """A tap on a word: show its advice and let the learner hear both versions."""
+    nothing = (gr.update(), gr.update(), gr.update(), gr.update(), gr.update())
+    if not state or evt.index is None:
+        return nothing
+    index = evt.index if isinstance(evt.index, int) else evt.index[0]
+    i = state["index_map"][index] if index < len(state["index_map"]) else None
+    if i is None:
+        return nothing
+    f = state["feedback"][i]
+    lo, hi = state["spans"][i]
+    you = state["audio"][int(lo * SAMPLE_RATE) : int(hi * SAMPLE_RATE)]
+    title = f"### {f.word} — {f.band}"
+    tips = "\n".join(f"- {t}" for t in f.tips) if f.tips else "This word sounded clear."
+    tips += f"\n\n<small>expected /{' '.join(state['expected'][i])}/ · heard /{' '.join(state['heard'][i])}/</small>"
+    return gr.update(visible=True), title, tips, (SAMPLE_RATE, you), model_audio(f.word, state["lang"], "slow")
 
 
 with gr.Blocks(title="Pronunciation Coach") as demo:
     gr.Markdown(
         "# Pronunciation Coach\n"
-        "Record a sentence. Type it in the box for **known-sentence** mode, or leave the box empty "
-        "for **free speech** (Whisper works out the words first). Every expected phone is then scored "
-        "against what the phoneme recogniser actually heard."
+        "Record yourself reading the sentence (or just speak, and leave the box empty). "
+        "Then **tap any word** to hear how you said it and how it should sound."
     )
     with gr.Row():
         with gr.Column(scale=1):
             audio = gr.Audio(sources=["microphone", "upload"], type="numpy", label="Your recording")
-            text = gr.Textbox(label="Sentence (leave empty for free speech)", lines=2)
+            text = gr.Textbox(label="The sentence you are reading (leave empty for free speech)", lines=2)
             with gr.Row():
                 accent = gr.Dropdown(list(ACCENTS), value=DEFAULT_ACCENT, label="Target accent")
-                l1 = gr.Dropdown(L1_OPTIONS, value=DEFAULT_L1, label="Learner's first language")
-            button = gr.Button("Assess", variant="primary")
+                l1 = gr.Dropdown(L1_OPTIONS, value=DEFAULT_L1, label="Your first language")
+            button = gr.Button("Check my pronunciation", variant="primary")
         with gr.Column(scale=2):
-            summary = gr.Textbox(label="What was said", lines=5)
-            phones = gr.HighlightedText(
-                label=f"Expected phones (green ≥ {GOP_GOOD}, amber ≥ {GOP_UNSURE}, red below)",
-                color_map=COLORS,
-                show_legend=True,
-            )
-    table = gr.Dataframe(
-        headers=["word", "phone", "start (s)", "GOP", "posterior", "heard", "top-3 candidates"],
-        label="Per-phone detail",
-        wrap=True,
+            words_hl = gr.HighlightedText(label="Your sentence — tap a word", color_map=BAND_COLOR, show_legend=True)
+            summary_md = gr.Markdown()
+            with gr.Row():
+                you_audio = gr.Audio(label="You", interactive=False)
+                model_normal = gr.Audio(label="Model", interactive=False)
+                model_slow = gr.Audio(label="Model, slowly", interactive=False)
+            with gr.Group(visible=False) as word_panel:
+                word_title = gr.Markdown()
+                word_tips = gr.Markdown()
+                with gr.Row():
+                    word_you = gr.Audio(label="You said", interactive=False)
+                    word_model = gr.Audio(label="Model says", interactive=False)
+
+    with gr.Accordion("Technical details (for teachers)", open=False):
+        tech_text = gr.Textbox(label="What the recogniser saw", lines=5)
+        ipa_hl = gr.HighlightedText(
+            label=f"Expected phones, IPA (green ≥ {GOP_GOOD}, amber ≥ {GOP_UNSURE}, red below)",
+            color_map=IPA_COLORS,
+            show_legend=True,
+        )
+        table = gr.Dataframe(
+            headers=["word", "phone", "start (s)", "GOP", "posterior", "heard", "top-3 candidates"],
+            label="Per-phone detail",
+            wrap=True,
+        )
+        plot = gr.Plot(label="Phone posteriors over time")
+
+    state = gr.State()
+    button.click(
+        run,
+        [audio, text, accent, l1],
+        [words_hl, summary_md, you_audio, model_normal, model_slow, state, word_panel, tech_text, ipa_hl, table, plot],
     )
-    plot = gr.Plot(label="What the recogniser saw")
-    button.click(run, [audio, text, accent, l1], [summary, phones, table, plot])
+    words_hl.select(pick_word, [state], [word_panel, word_title, word_tips, word_you, word_model])
 
 if __name__ == "__main__":
     log.info(

@@ -26,6 +26,11 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
        └─ wav2vec2 phoneme CTC ──→ posterior grid ──→ greedy decode ──→ "what was heard"
 ```
 
+* **Learner view** – each word coloured (clear / almost / work on this), a plain-language
+  summary of the sounds to practise, and "you vs model" playback for the sentence and for any
+  word you tap. The model voice is Microsoft Edge's neural TTS via `edge-tts` (cached in
+  `tts_cache/`; falls back to espeak-ng offline). Everything technical sits in a collapsed
+  "Technical details (for teachers)" section.
 * **Known-sentence mode** – you type the sentence; the word-recognition step is skipped.
 * **Free-speech mode** – leave the text empty; Whisper finds the words the learner *meant*,
   and the phoneme track shows what they *said*.
