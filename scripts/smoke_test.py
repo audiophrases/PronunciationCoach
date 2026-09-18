@@ -69,6 +69,8 @@ def main() -> None:
 
     print(f"\nreference text{' (transcribed by Whisper)' if result.transcribed else ''}: {result.text}")
     print(f"heard (text-independent): {result.heard_text}")
+    if result.extra:
+        print(f"heard but not in the sentence: {result.extra_text(min_phones=1)}")
     if result.unknown_phones:
         print(f"expected phones missing from model vocabulary: {result.unknown_phones}")
 
@@ -76,10 +78,10 @@ def main() -> None:
     for w in result.words:
         for i, p in enumerate(w.phones):
             top = " ".join(f"{ph}:{pr:.2f}" for ph, pr in p.candidates)
-            flag = "" if p.heard == p.expected else "  <-- " + p.category
+            flag = "" if p.category == "good" else "  <-- " + p.category
             print(
                 f"{w.word if i == 0 else '':<12}{p.expected:<7}{p.start_s:>6.2f}{p.end_s:>6.2f}"
-                f"{p.gop:>7.2f}{p.posterior:>6.2f}  {p.heard:<6} {top}{flag}"
+                f"{p.gop:>7.2f}{p.posterior:>6.2f}  {p.heard_label:<11} {top}{flag}"
             )
     print("\nper word:", "  ".join(f"{w.word}={w.gop_min:.1f}({w.category})" for w in result.words))
     print("timings:", {k: f"{v:.2f}s" for k, v in result.timings.items()}, f"total={total:.2f}s")

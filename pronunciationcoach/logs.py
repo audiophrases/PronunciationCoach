@@ -70,7 +70,10 @@ def _stamp() -> str:
 def log_assessment(log: logging.Logger, result: Assessment, l1: str, audio_16k: np.ndarray) -> Path | None:
     """Write the one-line summary (and the details in debug mode); archive the recording if asked."""
     flagged = [
-        f"{w.word}/{p.expected}->{p.heard}({p.gop:.1f})" for w in result.words for p in w.phones if p.category != "good"
+        f"{w.word}/{p.expected}->{p.heard_label}({p.gop:.1f})"
+        for w in result.words
+        for p in w.phones
+        if p.category != "good"
     ]
     timings = " ".join(f"{k}={v:.1f}s" for k, v in result.timings.items())
     log.info(
@@ -84,13 +87,15 @@ def log_assessment(log: logging.Logger, result: Assessment, l1: str, audio_16k: 
         " ".join(flagged) or "none",
         timings,
     )
+    if result.extra:
+        log.info("heard outside the sentence: %s", result.extra_text(min_phones=1))
     if result.unknown_phones:
         log.warning("expected phones without a model label: %s", result.unknown_phones)
     if log.isEnabledFor(logging.DEBUG):
         for w in result.words:
             for p in w.phones:
                 top = " ".join(f"{ph}:{pr:.2f}" for ph, pr in p.candidates)
-                log.debug("  %-12s %-6s %5.2f-%5.2fs gop=%6.2f post=%.2f heard=%-5s %s", w.word, p.expected, p.start_s, p.end_s, p.gop, p.posterior, p.heard, top)
+                log.debug("  %-12s %-6s %5.2f-%5.2fs gop=%6.2f post=%.2f heard=%-11s %s", w.word, p.expected, p.start_s, p.end_s, p.gop, p.posterior, p.heard_label, top)
 
     if not SAVE_RECORDINGS:
         return None

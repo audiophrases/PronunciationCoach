@@ -76,3 +76,42 @@ def test_equivalent_variants_are_not_penalised():
     assert score.gop == pytest.approx(0.0)
     assert score.heard == "ɐ"
     assert score.posterior == pytest.approx((0.69 + 0.25) / 0.95, abs=1e-3)
+
+
+def test_wildcard_absorbs_a_repeated_word():
+    from pronunciationcoach.align import align_words
+
+    # "a b" said as "a b a b": the wildcard should swallow one repeat, not smear the phones.
+    em = grid([{1: 0.9}, {}, {2: 0.9}, {}, {}, {1: 0.9}, {}, {2: 0.9}, {}])
+    result = align_words(em, [[1], [2]])
+    assert [s.phone for s in result.segments] == ["a", "b"]
+    assert len(result.segments) == 2
+    assert result.extra and [p for run in result.extra for p in run.phones] == ["a", "b"]
+
+
+def test_wildcard_leaves_a_clean_sentence_alone():
+    from pronunciationcoach.align import align_words
+
+    em = grid([{}, {1: 0.9}, {}, {2: 0.9}, {}, {3: 0.9}, {}])
+    result = align_words(em, [[1, 2], [3]])
+    assert [(s.phone, s.start) for s in result.segments] == [("a", 1), ("b", 3), ("c", 5)]
+    assert result.extra == []
+
+
+def test_dropped_phone_is_reported_as_not_heard():
+    from pronunciationcoach.scoring import mark_dropped
+
+    # word "a c b": the c was never said; the aligner squeezes it onto a's frame where a still wins
+    em = grid([{1: 0.9}, {1: 0.9}, {2: 0.9}])
+    segs = forced_align(em, [1, 3, 2])
+    scores = [score_segment(em, s) for s in segs]
+    mark_dropped(scores, segs, em)
+    assert [s.dropped for s in scores] == [False, True, False]
+    assert scores[1].heard_label == "(not heard)"
+
+
+def test_flap_accepts_t_but_t_does_not_accept_d():
+    from pronunciationcoach.scoring import accepted
+
+    assert accepted("ɾ") >= {"ɾ", "t", "d"}
+    assert "ɾ" in accepted("t") and "d" not in accepted("t")

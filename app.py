@@ -71,7 +71,7 @@ def run(audio, text, accent_name, l1):
             f"{p.start_s:.2f}",
             f"{p.gop:.2f}",
             f"{p.posterior:.2f}",
-            p.heard,
+            p.heard_label,
             "  ".join(f"{ph} {pr:.2f}" for ph, pr in p.candidates),
         ]
         for word in result.words
@@ -82,9 +82,11 @@ def run(audio, text, accent_name, l1):
     if result.unknown_phones:
         reference += f"\n(no model label for: {' '.join(result.unknown_phones)})"
     timing = "  ".join(f"{k} {v:.1f}s" for k, v in result.timings.items())
+    extra = result.extra_text()
     summary = (
-        f"{reference}\n\nHeard, text-independent:  {result.heard_text}\n\n"
-        f"{result.duration_s:.1f} s of audio · {timing}"
+        f"{reference}\n\nHeard, text-independent:  {result.heard_text}\n"
+        + (f"\nHeard but not in the sentence (repeats, hesitations):  {extra}\n" if extra else "")
+        + f"\n{result.duration_s:.1f} s of audio · {timing}"
     )
     fig = posterior_heatmap(result.emissions, result.segments)
     return summary, highlighted, rows, fig

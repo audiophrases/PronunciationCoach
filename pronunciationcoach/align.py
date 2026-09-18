@@ -2,8 +2,11 @@
 
 * `greedy_decode` – what the recogniser thinks it heard, with no reference text.
 * `forced_align`  – where each *expected* phone sits, given a reference text.
+* `align_words`   – forced alignment with a wildcard between words, so hesitations,
+                    repeats and false starts are absorbed instead of dragging the
+                    expected phones onto them. This is what the pipeline uses.
 
-Both return `Segment`s in frame units; `Emissions.frame_to_s` converts to seconds.
+All return `Segment`s in frame units; `Emissions.frame_to_s` converts to seconds.
 """
 
 from __future__ import annotations
@@ -24,6 +27,28 @@ class Segment:
     start: int  # frame, inclusive
     end: int  # frame, exclusive
     score: float  # mean log-prob of `phone` over [start, end)
+
+
+@dataclass
+class ExtraRun:
+    """Consecutive phones the recogniser heard where the sentence has no word."""
+
+    phones: list[str]
+    start: int
+    end: int
+
+
+@dataclass
+class Alignment:
+    segments: list[Segment]  # one per expected phone, in order
+    extra: list[ExtraRun]  # speech that matched no word of the sentence
+
+
+# Log-probability granted to the wildcard on every frame. 0 (probability 1) means "between
+# words, anything goes for free": each word is then matched wherever its phones fit best, in
+# order, and everything else - silence, hesitations, a repeated word - goes to the wildcard.
+# Measured on real recordings: clean sentences are unaffected, repeats are absorbed.
+WILDCARD_LOG_PROB = 0.0
 
 
 def greedy_decode(em: Emissions) -> list[Segment]:
@@ -66,3 +91,42 @@ def forced_align(em: Emissions, target_ids: list[int]) -> list[Segment]:
     labels, scores = AF.forced_align(log_probs, targets, blank=em.blank_id)
     spans = AF.merge_tokens(labels[0], scores[0], blank=em.blank_id)
     return [Segment(em.labels[s.token], s.token, s.start, s.end, float(s.score)) for s in spans]
+
+
+def align_words(em: Emissions, words: list[list[int]]) -> Alignment:
+    """Forced alignment of word phone sequences with a wildcard allowed between words."""
+    if not words:
+        return Alignment([], [])
+    star = em.log_probs.shape[1]  # one extra column, used only by the aligner
+    targets: list[int] = [star]
+    for ids in words:
+        targets += list(ids) + [star]
+    needed = len(targets) + sum(a == b for a, b in zip(targets, targets[1:]))
+    if em.n_frames < needed:
+        raise ValueError(
+            f"Audio too short: {em.n_frames} frames for {sum(map(len, words))} expected phones. "
+            "Is the recording really this sentence?"
+        )
+    padded = np.concatenate(
+        [
+            np.ascontiguousarray(em.log_probs, dtype=np.float32),
+            np.full((em.n_frames, 1), WILDCARD_LOG_PROB, dtype=np.float32),
+        ],
+        axis=1,
+    )
+    labels, scores = AF.forced_align(
+        torch.from_numpy(padded)[None], torch.tensor([targets], dtype=torch.int32), blank=em.blank_id
+    )
+    spans = AF.merge_tokens(labels[0], scores[0], blank=em.blank_id)
+
+    segments = [Segment(em.labels[s.token], s.token, s.start, s.end, float(s.score)) for s in spans if s.token != star]
+    gaps = [(s.start, s.end) for s in spans if s.token == star]
+    extra: list[ExtraRun] = []
+    for heard in greedy_decode(em):
+        if any(a <= heard.start and heard.end <= b for a, b in gaps):
+            if extra and heard.start - extra[-1].end <= 15:  # same run if within 300 ms
+                extra[-1].phones.append(heard.phone)
+                extra[-1].end = heard.end
+            else:
+                extra.append(ExtraRun([heard.phone], heard.start, heard.end))
+    return Alignment(segments, extra)

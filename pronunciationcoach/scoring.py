@@ -32,11 +32,26 @@ EQUIVALENT: list[set[str]] = [
 ]
 
 
+# One-way tolerance: an expected flap may be realised as a clear t or d (nobody marks that),
+# and an expected t or d may come out flapped between vowels - but t must never accept d.
+ALLOPHONES: dict[str, set[str]] = {"ɾ": {"t", "d"}, "t": {"ɾ"}, "d": {"ɾ"}}
+
+
 def equivalents(phone: str) -> set[str]:
     for group in EQUIVALENT:
         if phone in group:
             return group
     return {phone}
+
+
+def accepted(phone: str) -> set[str]:
+    """Every symbol that counts as a correct realisation of the expected phone."""
+    return equivalents(phone) | ALLOPHONES.get(phone, set()) | {phone}
+
+
+# A phone whose aligned frames sit this far after the previous phone of the same word was
+# not produced where it belongs; the aligner parked it on the nearest similar sound.
+DROPPED_GAP_S = 0.25
 
 
 def category(gop: float) -> str:
@@ -56,6 +71,11 @@ class PhoneScore:
     posterior: float  # share of non-blank probability mass on the expected phone
     heard: str  # strongest non-blank competitor (may equal `expected`)
     candidates: list[tuple[str, float]] = field(default_factory=list)  # top-k (phone, prob)
+    dropped: bool = False  # the phone was not produced at all (see mark_dropped)
+
+    @property
+    def heard_label(self) -> str:
+        return "(not heard)" if self.dropped else self.heard
 
     @property
     def category(self) -> str:
@@ -82,7 +102,7 @@ class WordScore:
 
 def score_segment(em: Emissions, seg: Segment, top_k: int = 3) -> PhoneScore:
     block = em.log_probs[seg.start : seg.end]  # (n, C)
-    group = equivalents(seg.phone)
+    group = accepted(seg.phone)
     group_ids = [i for i, label in enumerate(em.labels) if label in group] or [seg.phone_id]
 
     competitors = block.copy()
@@ -116,6 +136,28 @@ def score_words(em: Emissions, segments: list[Segment], words: list[tuple[str, i
     cursor = 0
     for word, n in words:
         chunk = segments[cursor : cursor + n]
-        out.append(WordScore(word, [score_segment(em, s) for s in chunk]))
+        scores = [score_segment(em, s) for s in chunk]
+        mark_dropped(scores, chunk, em)
+        out.append(WordScore(word, scores))
         cursor += n
     return out
+
+
+def mark_dropped(scores: list[PhoneScore], segments: list[Segment], em: Emissions) -> None:
+    """Flag expected phones that were not produced, so feedback says "not heard" rather than
+    reporting whatever sound the aligner had to park them on.
+
+    Two signatures, both only within a word (pauses between words are legitimate):
+    * the phone sits far after the previous phone - it was found somewhere later instead;
+    * its frames really belong to a neighbour: the competitor that won is the previous or
+      next expected phone of the same word, and the expected phone had next to no mass.
+    """
+    for i, (score, seg) in enumerate(zip(scores, segments)):
+        if score.category == "good":
+            continue
+        if i > 0 and em.frame_to_s(seg.start - segments[i - 1].end) > DROPPED_GAP_S:
+            score.dropped = True
+            continue
+        neighbours = {scores[j].expected for j in (i - 1, i + 1) if 0 <= j < len(scores)}
+        if score.heard in neighbours and score.posterior < 0.1:
+            score.dropped = True
