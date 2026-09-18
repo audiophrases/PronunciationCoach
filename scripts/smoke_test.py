@@ -46,12 +46,12 @@ def main() -> None:
     ap.add_argument("--audio", type=Path)
     ap.add_argument("--text", help="reference sentence; omit for free-speech mode")
     ap.add_argument("--free", action="store_true", help="ignore the reference text and use Whisper")
-    ap.add_argument("--accent", choices=["American", "British"], default="American")
+    ap.add_argument("--accent", choices=["American", "British"], default=None, help="default: PC_ACCENT or American")
     ap.add_argument("--plot", type=Path, help="save the posterior heatmap as PNG")
     args = ap.parse_args()
 
     from pronunciationcoach.audio import load_audio
-    from pronunciationcoach.g2p import ACCENTS
+    from pronunciationcoach.g2p import ACCENTS, DEFAULT_ACCENT
     from pronunciationcoach.pipeline import assess
 
     if args.audio:
@@ -64,7 +64,7 @@ def main() -> None:
     audio = load_audio(path)
     print(f"audio: {path}  ({len(audio) / 16000:.2f} s)")
     t0 = time.perf_counter()
-    result = assess(audio, 16000, text, ACCENTS[args.accent])
+    result = assess(audio, 16000, text, ACCENTS[args.accent or DEFAULT_ACCENT])
     total = time.perf_counter() - t0
 
     print(f"\nreference text{' (transcribed by Whisper)' if result.transcribed else ''}: {result.text}")

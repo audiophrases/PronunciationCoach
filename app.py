@@ -6,7 +6,7 @@ import os
 
 import gradio as gr
 
-from pronunciationcoach.g2p import ACCENTS
+from pronunciationcoach.g2p import ACCENTS, DEFAULT_ACCENT
 from pronunciationcoach.pipeline import assess
 from pronunciationcoach.scoring import GOP_GOOD, GOP_UNSURE
 from pronunciationcoach.viz import posterior_heatmap
@@ -68,7 +68,7 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
             audio = gr.Audio(sources=["microphone", "upload"], type="numpy", label="Your recording")
             text = gr.Textbox(label="Sentence (leave empty for free speech)", lines=2)
             with gr.Row():
-                accent = gr.Dropdown(list(ACCENTS), value="American", label="Target accent")
+                accent = gr.Dropdown(list(ACCENTS), value=DEFAULT_ACCENT, label="Target accent")
                 l1 = gr.Dropdown(L1_OPTIONS, value="Spanish", label="Learner's first language")
             button = gr.Button("Assess", variant="primary")
         with gr.Column(scale=2):
@@ -90,4 +90,5 @@ if __name__ == "__main__":
     demo.queue(default_concurrency_limit=1).launch(
         server_name=os.environ.get("GRADIO_SERVER_NAME", "127.0.0.1"),
         server_port=int(os.environ.get("GRADIO_SERVER_PORT", "7860")),
+        inbrowser=os.environ.get("PC_OPEN_BROWSER") == "1",  # the .bat launcher sets this
     )

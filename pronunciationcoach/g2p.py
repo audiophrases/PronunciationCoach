@@ -8,13 +8,17 @@ expect them to (water: w ɔː ɾ ɚ vs w ɔː t ə).
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from functools import lru_cache
 
 from .espeak import ensure_espeak
 
-ACCENTS = {"American": "en-us", "British": "en-gb"}
+ACCENTS = {"American": "en-us", "British": "en-gb"}  # General American is the project default
+DEFAULT_ACCENT = os.environ.get("PC_ACCENT", "American")
+if DEFAULT_ACCENT not in ACCENTS:
+    raise ValueError(f"PC_ACCENT must be one of {list(ACCENTS)}, got {DEFAULT_ACCENT!r}")
 
 _WORD_RE = re.compile(r"[A-Za-z]+(?:'[A-Za-z]+)?")
 

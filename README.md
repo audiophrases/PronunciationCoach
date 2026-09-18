@@ -32,7 +32,20 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
 * **GOP** (Goodness of Pronunciation) = log P(expected phone) − log P(best competing phone),
   averaged over the frames the expected phone was aligned to. 0 is perfect; more negative is worse.
 
-## Run locally
+## Windows: double-click launchers
+
+Everything in `launchers\` is a plain `.bat` file:
+
+| File | What it does |
+| --- | --- |
+| `setup.bat` | First-time install: uv, espeak-ng, ffmpeg (via winget), Python packages, model download, test run |
+| `run_app.bat` | Starts the coach and opens it in your browser. Keep the window open; close it to stop |
+| `score_recording.bat` | Drag a recording onto it, type the sentence (or press Enter for free speech), get the phone table and heatmap |
+
+Preferences live at the top of `launchers\_env.bat`: `PC_ACCENT` (General **American** by default, or `British`)
+and `PC_ASR_MODEL` (Whisper size for free speech).
+
+## Run from a terminal
 
 Requirements: Python 3.11 (managed by `uv`), [uv](https://github.com/astral-sh/uv),
 [espeak-ng](https://github.com/espeak-ng/espeak-ng) and ffmpeg on PATH.
