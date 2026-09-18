@@ -41,6 +41,12 @@ Everything in `launchers\` is a plain `.bat` file:
 | `setup.bat` | First-time install: uv, espeak-ng, ffmpeg (via winget), Python packages, model download, test run |
 | `run_app.bat` | Starts the coach and opens it in your browser. Keep the window open; close it to stop |
 | `score_recording.bat` | Drag a recording onto it, type the sentence (or press Enter for free speech), get the phone table and heatmap |
+| `run_app_debug.bat` | Same as `run_app.bat`, plus the full per-phone table in the log and every recording archived in `recordings\` (wav + json) |
+| `open_logs.bat` | Opens `logs\app.log` in Notepad and the `recordings\` folder |
+
+The app always writes one line per assessment to `logs\app.log` (mode, text, what was heard, flagged
+phones, timings) plus any errors. Archived recordings can be replayed by dragging the `.wav` onto
+`score_recording.bat`.
 
 Preferences live at the top of `launchers\_env.bat`: `PC_ACCENT` (General **American** by default, or `British`)
 and `PC_ASR_MODEL` (Whisper size for free speech).

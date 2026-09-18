@@ -6,23 +6,35 @@ import os
 
 import gradio as gr
 
+from pronunciationcoach.asr import DEFAULT_ASR
+from pronunciationcoach.audio import to_mono_16k
+from pronunciationcoach.engine import DEFAULT_MODEL
 from pronunciationcoach.g2p import ACCENTS, DEFAULT_ACCENT
+from pronunciationcoach.logs import DEBUG, LOG_FILE, SAVE_RECORDINGS, log_assessment, setup_logging
 from pronunciationcoach.pipeline import assess
 from pronunciationcoach.scoring import GOP_GOOD, GOP_UNSURE
 from pronunciationcoach.viz import posterior_heatmap
 
+log = setup_logging()
 COLORS = {"good": "#2e8b57", "unsure": "#e0a800", "off": "#c0392b"}
 L1_OPTIONS = ["Spanish", "Catalan", "Other / unknown"]  # plumbed through for the next stage; unused today
 
 
 def run(audio, text, accent_name, l1):
     if audio is None:
+        log.warning("assess called without audio")
         raise gr.Error("Record or upload some audio first.")
     sr, samples = audio
+    log.debug("request: sr=%d samples=%s text=%r accent=%s L1=%s", sr, getattr(samples, "shape", None), text, accent_name, l1)
     try:
         result = assess(samples, sr, text, ACCENTS[accent_name])
     except ValueError as exc:  # e.g. audio far too short for the sentence
+        log.warning("assessment rejected: %s", exc)
         raise gr.Error(str(exc)) from exc
+    except Exception as exc:
+        log.exception("assessment failed")
+        raise gr.Error(f"Something went wrong: {exc!r}. Details are in {LOG_FILE}") from exc
+    log_assessment(log, result, l1, to_mono_16k(samples, sr))
 
     highlighted = []
     for word in result.words:
@@ -87,7 +99,12 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
     button.click(run, [audio, text, accent, l1], [summary, phones, table, plot])
 
 if __name__ == "__main__":
+    log.info(
+        "starting: phoneme model=%s asr=%s accent=%s debug=%s save_recordings=%s log=%s",
+        DEFAULT_MODEL, DEFAULT_ASR, DEFAULT_ACCENT, DEBUG, SAVE_RECORDINGS, LOG_FILE,
+    )
     demo.queue(default_concurrency_limit=1).launch(
+        show_error=True,
         server_name=os.environ.get("GRADIO_SERVER_NAME", "127.0.0.1"),
         server_port=int(os.environ.get("GRADIO_SERVER_PORT", "7860")),
         inbrowser=os.environ.get("PC_OPEN_BROWSER") == "1",  # the .bat launcher sets this
