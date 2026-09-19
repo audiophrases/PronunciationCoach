@@ -26,11 +26,16 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
        └─ wav2vec2 phoneme CTC ──→ posterior grid ──→ greedy decode ──→ "what was heard"
 ```
 
-* **Learner view** – each word coloured (clear / almost / work on this), a plain-language
-  summary of the sounds to practise, and "you vs model" playback for the sentence and for any
-  word you tap. The model voice is Microsoft Edge's neural TTS via `edge-tts` (cached in
-  `tts_cache/`; falls back to espeak-ng offline). Everything technical sits in a collapsed
-  "Technical details (for teachers)" section.
+* **Learner view** – a score ring, the sentence as tappable word chips (clear / almost /
+  work on this), one player that speaks whatever you tap: the whole sentence (you, the model,
+  the model slowly), one word, or one sound inside a word, each with a line of plain-language
+  advice. The model voice is Microsoft Edge's neural TTS via `edge-tts` (cached in `tts_cache/`;
+  falls back to espeak-ng offline). Everything technical sits in a collapsed
+  "Technical details (for teachers)" section: timeline, IPA, per-phone table, posterior heatmap.
+* **Crops** – word and sound clips are placed with measured constants (see `boundaries.py`):
+  the recogniser's spike starts ~80 ms after a sound begins, so onsets are shifted back by that,
+  and touching words are cut at the quietest point between them. Against Edge TTS word
+  boundaries the crops are within ~25 ms (start) / ~30 ms (end) of the truth.
 * **Known-sentence mode** – you type the sentence; the word-recognition step is skipped.
 * **Free-speech mode** – leave the text empty; Whisper finds the words the learner *meant*,
   and the phoneme track shows what they *said*.
@@ -77,10 +82,14 @@ DLL in `C:\Program Files\eSpeak NG` automatically.
 Memory: the phoneme model (~1.4 GB) plus Whisper `base.en` (~1.2 GB) need about 3 GB free.
 On an 8 GB machine, let Windows manage the page file size and close browser tabs you don't need.
 
-## Deploy for free
+## Deploying
 
-The `Dockerfile` targets a Hugging Face Space (CPU basic, 2 vCPU / 16 GB). Create a Docker
-Space, push this repository, done. The same image runs anywhere Docker runs.
+The `Dockerfile` runs anywhere Docker runs, including a Hugging Face Docker Space - but since
+2026 Hugging Face only hosts Gradio/Docker Spaces on a paid PRO plan (static Spaces stay free).
+The planned free route is to run inference in the browser (transformers.js, ONNX int8 of the same
+model) on students' laptops and Chromebooks, published from this repository via GitHub Pages;
+the Python app stays as the teacher's tuning bench and the reference the browser version is
+tested against. Until then, the app runs on the teacher's own machine.
 
 ## Models
 

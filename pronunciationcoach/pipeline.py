@@ -10,6 +10,7 @@ import numpy as np
 from .align import ExtraRun, Segment, align_words, greedy_decode
 from .asr import transcribe
 from .audio import duration_s, to_mono_16k
+from .boundaries import Span, phone_spans, word_spans
 from .engine import DEFAULT_MODEL, Emissions, get_engine
 from .g2p import text_to_phones
 from .scoring import WordScore, score_words
@@ -26,6 +27,7 @@ class Assessment:
     segments: list[Segment]  # the forced alignment behind `words`, flat, one per expected phone
     extra: list[ExtraRun]  # speech heard where the sentence has no word (repeats, hesitations)
     emissions: Emissions
+    audio: np.ndarray  # the 16 kHz mono signal that was scored
     unknown_phones: list[str] = field(default_factory=list)  # expected phones the model has no label for
     timings: dict[str, float] = field(default_factory=dict)
 
@@ -37,29 +39,28 @@ class Assessment:
     def heard_text(self) -> str:
         return " ".join(s.phone for s in self.heard)
 
-    def word_spans(self, pad_before: float = 0.10, pad_after: float = 0.25) -> list[tuple[float, float]]:
-        """(start, end) in seconds of each word in the recording, for replaying it.
-
-        CTC marks a phone near its onset, so the last phone's span ends before the
-        sound does: pad after, but never into the next word. Dropped phones were
-        aligned somewhere arbitrary and are ignored when placing the word.
-        """
-        em = self.emissions
-        starts: list[float] = []
-        ends: list[float] = []
-        cursor = 0
+    def segments_by_word(self) -> list[list[Segment]]:
+        out, cursor = [], 0
         for w in self.words:
-            segs = self.segments[cursor : cursor + len(w.phones)]
-            kept = [s for s, p in zip(segs, w.phones) if not p.dropped] or segs
-            starts.append(em.frame_to_s(min(s.start for s in kept)))
-            ends.append(em.frame_to_s(max(s.end for s in kept)))
+            out.append(self.segments[cursor : cursor + len(w.phones)])
             cursor += len(w.phones)
-        spans = []
-        for i in range(len(starts)):
-            lo = max(starts[i] - pad_before, ends[i - 1] if i else 0.0, 0.0)
-            hi = min(ends[i] + pad_after, starts[i + 1] if i + 1 < len(starts) else self.duration_s, self.duration_s)
-            spans.append((lo, max(hi, lo + 0.05)))
-        return spans
+        return out
+
+    def word_spans(self) -> list[Span]:
+        """Where each word is in the recording (seconds), for replaying it. See boundaries.py."""
+        return word_spans(
+            self.audio,
+            self.segments_by_word(),
+            [[p.dropped for p in w.phones] for w in self.words],
+            self.emissions.frame_ms,
+        )
+
+    def phone_spans(self) -> list[list[Span | None]]:
+        """Per word, where each of its phones is (None for phones that were not produced)."""
+        return [
+            phone_spans(span, segs, [p.dropped for p in w.phones], self.emissions.frame_ms)
+            for span, segs, w in zip(self.word_spans(), self.segments_by_word(), self.words)
+        ]
 
     def extra_text(self, min_phones: int = 2) -> str:
         """Human-readable list of the extra runs, e.g. 'ɔ z ə z (7.5–8.4 s)'."""
@@ -131,6 +132,7 @@ def assess(
         segments=segments,
         extra=alignment.extra,
         emissions=em,
+        audio=audio,
         unknown_phones=unknown,
         timings=timings,
     )

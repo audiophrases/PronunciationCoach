@@ -145,3 +145,20 @@ def summary(words: list[WordScore], max_items: int = 3) -> str:
         else:
             lines.append(f"• {sound} was missing{times}")
     return head + "\n\nSounds to practise:\n" + "\n".join(lines)
+
+
+# Short labels for the sound pills under a word: plain spelling, IPA only as a last resort.
+PILL_OVERRIDES = {"ə": "uh", "ɐ": "uh", "ᵻ": "i", "ɚ": "er", "ɝ": "er", "ɾ": "t", "əl": "l", "n̩": "n"}
+
+
+def pill_label(phone: str) -> str:
+    if phone in PILL_OVERRIDES:
+        return PILL_OVERRIDES[phone]
+    if phone in SOUNDS:
+        return SOUNDS[phone][0]
+    return phone
+
+
+def sound_pills(w: WordScore) -> list[tuple[str, str]]:
+    """(label, band) per phone of the word, for a tappable row of sounds."""
+    return [(pill_label(p.expected), band(p)) for p in w.phones]

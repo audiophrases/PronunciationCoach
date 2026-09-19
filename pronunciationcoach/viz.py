@@ -62,3 +62,59 @@ def posterior_heatmap(em: Emissions, expected: list[Segment] | None = None, max_
         ax.add_patch(plt.Rectangle((x0, r), x1 - x0, 1.0, fill=False, edgecolor="cyan", linewidth=1.2))
     fig.tight_layout()
     return fig
+
+
+def timeline_figure(result, max_seconds: float = 20.0):
+    """Waveform with energy, every phone's spike, and the word/phone crops the learner hears.
+
+    Reads top to bottom: the signal, the recogniser's spikes (coloured by score,
+    dropped phones hollow), and the spans used for replay. If a crop looks wrong,
+    this is the picture that shows why.
+    """
+    from . import SAMPLE_RATE
+    from .boundaries import energy_db, speech_threshold, HOP
+
+    audio = result.audio[: int(max_seconds * SAMPLE_RATE)]
+    t = np.arange(len(audio)) / SAMPLE_RATE
+    db = energy_db(audio)
+    thr = speech_threshold(db)
+    t_db = np.arange(len(db)) * HOP / SAMPLE_RATE
+    colors = {"good": "#2e8b57", "unsure": "#e0a800", "off": "#c0392b"}
+
+    fig, (ax_wave, ax_align) = plt.subplots(
+        2, 1, figsize=(max(8.0, len(audio) / SAMPLE_RATE * 2.0), 4.6), sharex=True, height_ratios=[2, 1.4]
+    )
+    step = max(1, len(audio) // 6000)
+    ax_wave.plot(t[::step], audio[::step], color="#4a6fa5", linewidth=0.6)
+    ax_wave.set_ylabel("waveform")
+    ax_wave.set_ylim(-1.05, 1.05)
+    ax_e = ax_wave.twinx()
+    ax_e.plot(t_db, db, color="#888", linewidth=0.8, alpha=0.8)
+    ax_e.axhline(thr, color="#888", linestyle=":", linewidth=0.8)
+    ax_e.set_ylabel("energy dB", color="#888")
+    ax_e.set_ylim(min(db.min(), thr - 10), max(db.max() + 5, thr + 10))
+
+    spans = result.word_spans()
+    p_spans = result.phone_spans()
+    for k, (w, span, segs, ps) in enumerate(zip(result.words, spans, result.segments_by_word(), p_spans)):
+        shade = "#e8f4ea" if w.category == "good" else ("#fff4d6" if w.category == "unsure" else "#fbe3e0")
+        for ax in (ax_wave, ax_align):
+            ax.axvspan(span.start, span.end, color=shade, zorder=0)
+        ax_align.text((span.start + span.end) / 2, 0.98 if k % 2 == 0 else 0.86, w.word, ha="center", va="top", fontsize=9, fontweight="bold")
+        for p, seg, pspan in zip(w.phones, segs, ps):
+            s0, s1 = result.emissions.frame_to_s(seg.start), result.emissions.frame_to_s(seg.end)
+            face = "white" if p.dropped else colors[p.category]
+            ax_align.bar((s0 + s1) / 2, 0.45, width=max(s1 - s0, 0.01), bottom=0.05, color=face, edgecolor=colors[p.category], linewidth=1.2, zorder=3)
+            if pspan is not None:
+                ax_align.plot([pspan.start, pspan.start], [0.0, 0.55], color="#555", linewidth=0.6, zorder=2)
+                ax_align.text((pspan.start + pspan.end) / 2, 0.58, p.expected, ha="center", va="bottom", fontsize=7, color="#333")
+    for run in result.extra:
+        a, b = result.emissions.frame_to_s(run.start), result.emissions.frame_to_s(run.end)
+        ax_align.axvspan(a, b, color="#ddd", alpha=0.6, zorder=0)
+        ax_align.text((a + b) / 2, 0.92, "extra", ha="center", va="top", fontsize=7, color="#666")
+    ax_align.set_ylim(0, 1)
+    ax_align.set_yticks([])
+    ax_align.set_xlabel("time (s)")
+    ax_align.set_title("spikes (filled = scored sound, hollow = not heard) · ticks = phone onsets · shading = word crops", fontsize=8)
+    fig.tight_layout()
+    return fig
