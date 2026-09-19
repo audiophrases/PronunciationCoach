@@ -19,7 +19,8 @@ def test_describe_uses_plain_spelling_and_example():
 
 def test_phone_tips_read_naturally():
     assert phone_tip(ps("ð", "z", -6.0), "than") == "In *than*, 'th' as in *this* came out as 'z' as in *zoo*."
-    assert "was not heard" in phone_tip(ps("t", "ʁ", -1.5, dropped=True), "accent")
+    assert phone_tip(ps("t", "ʁ", -1.5, dropped=True), "accent").startswith("The 't' as in *ten* sound in *accent* was not heard")
+    assert phone_tip(ps("ə", "ɪ", -1.0), "gonna").startswith("The weak 'uh' sound (as in the first syllable of *about*) in *gonna* was not quite clear")
     assert "not quite clear" in phone_tip(ps("aɪ", "a", -1.0), "try")
 
 
@@ -38,7 +39,8 @@ def test_summary_counts_words_and_groups_recurring_sounds():
         WordScore("accent", [ps("t", "ʁ", -1.5, dropped=True)]),
     ]
     text = summary(words)
-    assert text.startswith("1 of 4 words were clear.")
+    assert text.startswith("Understood: 4 of 4 words. Clear: 1")
+    assert "Work on:" in text and "Accent notes" in text
     assert "'th' as in *this* came out as 'z' as in *zoo* (2 times)" in text
     assert "'t' as in *ten* was missing" in text
     mixed = summary([WordScore("than", [ps("ð", "z", -8.0)]), WordScore("other", [ps("ð", "d", -7.0)])])

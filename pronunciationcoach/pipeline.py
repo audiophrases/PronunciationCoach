@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 
 import numpy as np
 
 from .align import ExtraRun, Segment, align_words, greedy_decode
-from .asr import transcribe
+from .asr import transcribe_words
+from .listener import match_words
 from .audio import duration_s, to_mono_16k
 from .boundaries import Span, word_spans
 from .engine import DEFAULT_MODEL, Emissions, get_engine
 from .g2p import text_to_phones
+from .reference import acceptances, native_reference
 from .scoring import WordScore, score_words
 
 
@@ -31,6 +34,7 @@ class Assessment:
     audio: np.ndarray  # the 16 kHz mono signal that was scored
     spans: list[Span] = field(default_factory=list)  # where each word is, for replay
     span_source: str = "spikes"  # "charsiu" (frame aligner) or "spikes" (fallback)
+    reference_voices: list[str] = field(default_factory=list)  # native renderings the scorer listened to
     unknown_phones: list[str] = field(default_factory=list)  # expected phones the model has no label for
     timings: dict[str, float] = field(default_factory=dict)
 
@@ -79,12 +83,22 @@ def assess(
     timings["emissions"] = time.perf_counter() - t0
     heard = greedy_decode(em)
 
+    # The listener: Whisper's words and its confidence in each. It is the reference in
+    # free-speech mode and the intelligibility judge in both modes.
     transcribed = False
-    if not text or not text.strip():
+    heard_words = None
+    want_listener = os.environ.get("PC_LISTENER", "1") == "1"
+    if not text or not text.strip() or want_listener:
         t0 = time.perf_counter()
-        text = transcribe(audio)
-        transcribed = True
-        timings["asr"] = time.perf_counter() - t0
+        try:
+            asr_text, heard_words = transcribe_words(audio)
+            if not text or not text.strip():
+                text, transcribed = asr_text, True
+        except Exception as exc:  # out of memory, model missing, ...
+            logging.getLogger("pronunciationcoach").warning("listener unavailable (%s)", exc)
+            if not text or not text.strip():
+                raise
+        timings["listen"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
     word_phones = text_to_phones(text, lang)
@@ -110,8 +124,25 @@ def assess(
         raise RuntimeError(f"alignment returned {len(segments)} spans for {len(expected)} phones")
     for seg, phone in zip(segments, expected):
         seg.phone = phone  # show the expected spelling even where the model only had <unk>
-    words = score_words(em, segments, counts)
-    timings["align+score"] = time.perf_counter() - t0
+    timings["align"] = time.perf_counter() - t0
+
+    # Natives as the yardstick: whatever a natural voice does in this sentence is not an error.
+    t0 = time.perf_counter()
+    ref = None
+    if os.environ.get("PC_NATIVE_REF", "1") == "1":
+        try:
+            ref = native_reference(text, lang, engine)
+        except Exception as exc:
+            logging.getLogger("pronunciationcoach").warning("native reference unavailable (%s)", exc)
+    timings["reference"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    casual = os.environ.get("PC_CASUAL", "1") == "1"  # accept connected-speech forms (variants.py)
+    words = score_words(em, segments, counts, acceptances(word_phones, ref, lang, casual))
+    if heard_words is not None:
+        for w, listened in zip(words, match_words([wp.word for wp in word_phones], heard_words)):
+            w.listener_p, w.understood = listened.probability, listened.matched
+    timings["score"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
     spans, span_source = locate_words(audio, word_phones, words, segments, alignment.extra, em.frame_ms)
@@ -130,6 +161,7 @@ def assess(
         audio=audio,
         spans=spans,
         span_source=span_source,
+        reference_voices=list(ref.renderings) if ref else [],
         unknown_phones=unknown,
         timings=timings,
     )

@@ -17,6 +17,8 @@ rem Default first language shown in the app: Catalan, Spanish or "Other / unknow
 set "PC_L1=Catalan"
 rem Whisper size for free-speech mode. base.en fits an 8 GB laptop; small.en is better but needs ~2.3 GB more.
 set "PC_ASR_MODEL=base.en"
+rem Accept natural connected speech (gonna, dunno, dropped t, weak forms): 1. Set 0 for careful-reading practice.
+set "PC_CASUAL=1"
 rem ---------------------------------------------------------------------
 
 rem uv installs itself here when set up by setup.bat.

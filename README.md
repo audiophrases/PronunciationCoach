@@ -38,9 +38,21 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   repeats and hesitations are excluded. Against Edge TTS word boundaries the crops are within
   ~17 ms (start) / ~23 ms (end) of the truth; `scripts/calibrate_spikes.py` reproduces the numbers.
   If that model is unavailable the spike-based estimate in `boundaries.py` is used instead.
-* **Known-sentence mode** – you type the sentence; the word-recognition step is skipped.
-* **Free-speech mode** – leave the text empty; Whisper finds the words the learner *meant*,
-  and the phoneme track shows what they *said*.
+* **Speech, not dictionary words** – three things stop natural, connected speech from being
+  penalised. (1) *Native reference by example*: the sentence is synthesised with two natural
+  voices and run through our own recogniser, and whatever it hears a native do in that position
+  counts as correct (`reference.py`). (2) *Casual forms and connected-speech rules* – gonna/'ona,
+  dunno, weak forms, dropped final t/d, assimilation, yod coalescence, glottal t
+  (`variants.py`, meant to be edited by the teacher; `PC_CASUAL=0` for careful-reading mode).
+  (3) *A listener in the loop*: Whisper's per-word confidence says whether each word was caught
+  (`listener.py`). Each word then gets a verdict - **clear**, **accent** (understood; the
+  deviations are colouring), **almost** (understood with effort, or a sound that matters),
+  **work on this** (missed, or a top-priority contrast such as *th* or *v*) - from the listener's
+  confidence and the worst deviation weighted by how much that sound matters (`PRIORITY` in
+  `scoring.py`). The score ring counts words understood.
+* **Known-sentence mode** – you type the sentence; the listener still runs, as the intelligibility judge.
+* **Free-speech mode** – leave the text empty; Whisper's transcript is the reference and the
+  phoneme track shows what was actually *said*.
 * **GOP** (Goodness of Pronunciation) = log P(expected phone) − log P(best competing phone),
   averaged over the frames the expected phone was aligned to. 0 is perfect; more negative is worse.
 
@@ -81,8 +93,9 @@ uv run python app.py                  # Gradio UI on http://127.0.0.1:7860
 On Windows, install espeak-ng with `winget install eSpeak-NG.eSpeak-NG`; the code finds the
 DLL in `C:\Program Files\eSpeak NG` automatically.
 
-Memory: the phoneme model (~1.4 GB) plus the cropping model (~0.4 GB) plus Whisper `base.en`
-(~1.2 GB, free-speech mode only) need up to 3.5 GB free.
+Memory: the phoneme model (~1.4 GB), the cropping model (~0.4 GB) and Whisper `base.en` (~1.2 GB,
+the listener) together need about 3.5 GB free; if Whisper cannot load, verdicts fall back to
+severity only.
 On an 8 GB machine, let Windows manage the page file size and close browser tabs you don't need.
 
 ## Deploying

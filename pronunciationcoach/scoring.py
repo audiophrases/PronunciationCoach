@@ -72,6 +72,7 @@ class PhoneScore:
     heard: str  # strongest non-blank competitor (may equal `expected`)
     candidates: list[tuple[str, float]] = field(default_factory=list)  # top-k (phone, prob)
     dropped: bool = False  # the phone was not produced at all (see mark_dropped)
+    natural: str = ""  # non-empty when a native rendering does the same thing (see reference.py)
 
     @property
     def heard_label(self) -> str:
@@ -79,13 +80,30 @@ class PhoneScore:
 
     @property
     def category(self) -> str:
+        if self.natural:
+            return "good"  # natives do it too
         return "off" if self.dropped else category(self.gop)  # a sound not said at all is always an error
+
+
+# How much a deviation in a sound matters for being understood. Consonant contrasts that
+# separate many word pairs (th, v/b, s/z, ship/sheep) outrank accent colouring such as
+# unreduced weak vowels, which sound foreign but rarely cause misunderstanding. This is a
+# first, hand-set version of intelligibility weighting; it grows with the teacher's judgement.
+PRIORITY: dict[str, float] = {
+    "ð": 3, "θ": 3, "v": 3, "b": 2, "ɪ": 2, "iː": 2, "æ": 2, "ʃ": 2, "s": 2, "z": 2, "h": 2, "dʒ": 2, "tʃ": 2,
+    "ŋ": 1.5, "ʌ": 1.5, "ɜː": 1.5, "ɝ": 1.5,
+    "ə": 0.5, "ɐ": 0.5, "ᵻ": 0.5, "ɚ": 0.5,
+}
+
+VERDICTS = ("clear", "accent", "almost", "work on this")
 
 
 @dataclass
 class WordScore:
     word: str
     phones: list[PhoneScore]
+    listener_p: float | None = None  # the listener's confidence in this word, None if no listener ran
+    understood: bool | None = None  # the listener produced this word at all
 
     @property
     def gop_mean(self) -> float:
@@ -96,13 +114,44 @@ class WordScore:
         return float(min(p.gop for p in self.phones)) if self.phones else 0.0
 
     @property
+    def severity(self) -> float:
+        """Worst deviation, weighted by how much that sound matters (0 = nothing flagged)."""
+        flagged = [p for p in self.phones if p.category != "good"]
+        if not flagged:
+            return 0.0
+        return max(PRIORITY.get(p.expected, 1.0) * (1.0 if p.category == "off" else 0.5) for p in flagged)
+
+    @property
+    def verdict(self) -> str:
+        """What the learner should take away about this word.
+
+        clear        - nothing to note
+        accent       - understood without effort; the deviations are colouring, not errors
+        almost       - understood, but with effort or a sound that matters
+        work on this - missed by the listener, or a top-priority contrast (th, v) broken
+        """
+        sev = self.severity
+        p = 0.7 if self.listener_p is None else self.listener_p  # no listener: neither confident nor lost
+        understood = True if self.understood is None else self.understood
+        if not understood or p < 0.3:
+            return "work on this"
+        if sev == 0.0:
+            return "clear"
+        if sev >= 3.0 or (sev >= 2.0 and p < 0.8):
+            return "work on this"
+        if sev >= 1.5 or p < 0.6 or (sev >= 1.0 and p < 0.8):
+            return "almost"
+        return "accent"
+
+    @property
     def category(self) -> str:
-        return category(self.gop_min)
+        """Phone-style band of the word, kept for the technical views."""
+        return {"clear": "good", "accent": "good", "almost": "unsure", "work on this": "off"}[self.verdict]
 
 
-def score_segment(em: Emissions, seg: Segment, top_k: int = 3) -> PhoneScore:
+def score_segment(em: Emissions, seg: Segment, top_k: int = 3, also: set[str] | None = None) -> PhoneScore:
     block = em.log_probs[seg.start : seg.end]  # (n, C)
-    group = accepted(seg.phone)
+    group = accepted(seg.phone) | (also or set())
     group_ids = [i for i, label in enumerate(em.labels) if label in group] or [seg.phone_id]
 
     competitors = block.copy()
@@ -130,14 +179,28 @@ def score_segment(em: Emissions, seg: Segment, top_k: int = 3) -> PhoneScore:
     )
 
 
-def score_words(em: Emissions, segments: list[Segment], words: list[tuple[str, int]]) -> list[WordScore]:
-    """`words` is [(word, phone_count), ...] in order; segments are flat in the same order."""
+def score_words(
+    em: Emissions,
+    segments: list[Segment],
+    words: list[tuple[str, int]],
+    acceptances: list[list] | None = None,
+) -> list[WordScore]:
+    """`words` is [(word, phone_count), ...] in order; segments are flat in the same order.
+    `acceptances` (reference.Acceptance per phone, per word) widens what counts as correct."""
     out: list[WordScore] = []
     cursor = 0
-    for word, n in words:
+    for wi, (word, n) in enumerate(words):
         chunk = segments[cursor : cursor + n]
-        scores = [score_segment(em, s) for s in chunk]
+        accs = acceptances[wi] if acceptances else [None] * n
+        scores = [score_segment(em, s, also=(a.also if a else None)) for s, a in zip(chunk, accs)]
         mark_dropped(scores, chunk, em)
+        for score, a in zip(scores, accs):
+            if a is None or score.category == "good":
+                continue
+            if a.optional:
+                score.natural = f"drop|{a.source}"
+            elif score.heard in a.also:
+                score.natural = f"also|{a.source}"
         out.append(WordScore(word, scores))
         cursor += n
     return out

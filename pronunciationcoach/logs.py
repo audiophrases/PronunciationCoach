@@ -89,6 +89,11 @@ def log_assessment(log: logging.Logger, result: Assessment, l1: str, audio_16k: 
     )
     if result.extra:
         log.info("heard outside the sentence: %s", result.extra_text(min_phones=1))
+    verdicts = " ".join(f"{w.word}={w.verdict.replace(' ', '_')}({w.listener_p:.2f})" if w.listener_p is not None else f"{w.word}={w.verdict}" for w in result.words)
+    log.info("verdicts: %s", verdicts)
+    natural = [f"{w.word}/{p.expected}" for w in result.words for p in w.phones if p.natural]
+    if natural or result.reference_voices:
+        log.info("native reference %s | accepted as natural: %s", result.reference_voices, " ".join(natural) or "none")
     if result.unknown_phones:
         log.warning("expected phones without a model label: %s", result.unknown_phones)
     if log.isEnabledFor(logging.DEBUG):

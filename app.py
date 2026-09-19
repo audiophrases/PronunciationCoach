@@ -85,21 +85,36 @@ def clip(audio: np.ndarray, start: float, end: float, pad: float = 0.0) -> tuple
 
 
 def score_card_html(words, summary_text: str) -> str:
+    """Ring = words a listener caught; below it, the counts per verdict and the sound lists."""
     n = len(words)
-    clear = sum(w.category == "good" for w in words)
-    pct = 100.0 * clear / n if n else 0.0
+    has_listener = any(w.listener_p is not None for w in words)
+    understood = sum(1 for w in words if w.listener_p is None or w.understood)
+    clear = sum(w.verdict == "clear" for w in words)
+    ring_n, ring_label = (understood, "understood") if has_listener else (clear, "words clear")
+    pct = 100.0 * ring_n / n if n else 0.0
     color = "#2e8b57" if pct >= 80 else ("#e0a800" if pct >= 50 else "#c0392b")
-    lines = [ln[2:].strip() for ln in summary_text.splitlines() if ln.startswith("•")]
-    items = "".join(f"<li>{escape(ln).replace('*', '')}</li>" for ln in lines)
-    headline = "All clear - nice work!" if clear == n and n else f"{clear} of {n} words clear"
-    practise = f"<div class='headline'>Sounds to practise</div><ul>{items}</ul>" if items else ""
+    counts = {v: sum(w.verdict == v for w in words) for v in ("clear", "accent", "almost", "work on this")}
+    headline = "All clear - nice work!" if clear == n and n else " · ".join(
+        f"<span style='color:{BAND_COLOR[v]}'>{c} {v}</span>" for v, c in counts.items() if c
+    )
+    sections = ""
+    block, items = None, []
+    for ln in summary_text.splitlines()[1:]:
+        if ln.endswith(":") and not ln.startswith("•"):
+            if block:
+                sections += f"<div class='headline'>{escape(block)}</div><ul>{''.join(items)}</ul>"
+            block, items = ln[:-1], []
+        elif ln.startswith("•"):
+            items.append(f"<li>{escape(ln[2:].strip()).replace('*', '')}</li>")
+    if block:
+        sections += f"<div class='headline'>{escape(block)}</div><ul>{''.join(items)}</ul>"
     ring = (
         "<svg class='ring' viewBox='0 0 36 36'>"
         "<path class='bg' d='M18 2.0845a15.9155 15.9155 0 0 1 0 31.831a15.9155 15.9155 0 0 1 0-31.831'/>"
         f"<path class='fg' stroke='{color}' stroke-dasharray='{pct:.0f}, 100' d='M18 2.0845a15.9155 15.9155 0 0 1 0 31.831a15.9155 15.9155 0 0 1 0-31.831'/>"
-        f"<text x='18' y='19.5'>{clear}/{n}</text><text class='sub' x='18' y='24'>words clear</text></svg>"
+        f"<text x='18' y='19.5'>{ring_n}/{n}</text><text class='sub' x='18' y='24'>{ring_label}</text></svg>"
     )
-    return f"<div class='score-card'>{ring}<div><div class='headline'>{escape(headline)}</div>{practise}</div></div>"
+    return f"<div class='score-card'>{ring}<div><div class='headline'>{headline}</div>{sections}</div></div>"
 
 
 def run(audio, text, accent_name, l1):
@@ -149,7 +164,8 @@ def run(audio, text, accent_name, l1):
                 "word": w.word,
                 "band": f.band,
                 "span": (sp.start, sp.end),
-                "tips": [phone_tip(p, w.word) for p in w.phones if p.category != "good"],
+                "listener": w.listener_p,
+                "tips": f.tips,
                 "expected": [p.expected for p in w.phones],
                 "heard": [p.heard_label for p in w.phones],
             }
@@ -185,7 +201,7 @@ def run(audio, text, accent_name, l1):
         f"Heard, text-independent: {result.heard_text}\n"
         + (f"Heard but not in the sentence: {result.extra_text()}\n" if result.extra_text() else "")
         + (f"No model label for: {' '.join(result.unknown_phones)}\n" if result.unknown_phones else "")
-        + f"Word crops: {result.span_source}\n"
+        + f"Word crops: {result.span_source} · native reference: {', '.join(result.reference_voices) or 'none'}\n"
         + f"{result.duration_s:.1f} s of audio · {timing}"
     )
 
@@ -257,7 +273,7 @@ def pick_word(evt: gr.SelectData, state):
     i = state["word_index"][idx]
     w = state["words"][i]
     state["current"] = i
-    title = f"### {w['word']} — {w['band']}"
+    title = f"### {w['word']} — {w['band']}" + (f"  <span class='hint'>listener confidence {w['listener']:.0%}</span>" if w.get("listener") is not None else "")
     body = "\n".join(f"- {t}" for t in w["tips"]) if w["tips"] else "This word sounded clear."
     body += f"\n\n<span class='hint'>expected /{' '.join(w['expected'])}/ · heard /{' '.join(w['heard'])}/</span>"
     return gr.update(visible=True), title, body, clip(state["audio"], *w["span"]), state

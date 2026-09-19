@@ -10,11 +10,11 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 
-from .scoring import PhoneScore, WordScore
+from .scoring import PRIORITY, PhoneScore, WordScore
 
-# Learner-facing names for the scoring bands.
+# Learner-facing names for the phone-level bands, and colours for the word verdicts.
 BAND_LABEL = {"good": "clear", "unsure": "almost", "off": "work on this"}
-BAND_COLOR = {"clear": "#2e8b57", "almost": "#e0a800", "work on this": "#c0392b"}
+BAND_COLOR = {"clear": "#2e8b57", "accent": "#4a7fb5", "almost": "#e0a800", "work on this": "#c0392b"}
 
 # IPA -> (spelling, example word). Covers everything espeak produces for English plus the
 # sounds Catalan, Spanish and French speakers bring with them.
@@ -67,14 +67,20 @@ def describe(phone: str) -> str:
 
 
 def band(score: PhoneScore | WordScore) -> str:
-    return BAND_LABEL[score.category]
+    return score.verdict if isinstance(score, WordScore) else BAND_LABEL[score.category]
+
+
+def subject(phone: str) -> str:
+    """'The 'th' as in *this* sound' - or the description itself when it is already a noun phrase."""
+    d = describe(phone)
+    return f"The {d} sound" if d.startswith("'") else d[0].upper() + d[1:]
 
 
 def phone_tip(p: PhoneScore, word: str) -> str:
     if p.dropped:
-        return f"The {describe(p.expected)} sound in *{word}* was not heard - make sure you say it."
+        return f"{subject(p.expected)} in *{word}* was not heard - make sure you say it."
     if p.category == "unsure":
-        return f"The {describe(p.expected)} sound in *{word}* was not quite clear (it sounded a bit like {describe(p.heard)})."
+        return f"{subject(p.expected)} in *{word}* was not quite clear (it sounded a bit like {describe(p.heard)})."
     return f"In *{word}*, {describe(p.expected)} came out as {describe(p.heard)}."
 
 
@@ -89,38 +95,39 @@ class WordFeedback:
         return self.band == "clear"
 
 
+def natural_note(p: PhoneScore, word: str) -> str:
+    kind, _, source = p.natural.partition("|")
+    who = "natives do the same" if source.endswith("Neural") else "that is normal in connected speech"
+    if kind == "drop":
+        return f"You left out {describe(p.expected)} in *{word}* - {who}. Fine."
+    return f"Your {describe(p.expected)} in *{word}* came out as {describe(p.heard)} - {who}. Fine."
+
+
 def word_feedback(w: WordScore) -> WordFeedback:
     tips = [phone_tip(p, w.word) for p in w.phones if p.category != "good"]
+    tips += [natural_note(p, w.word) for p in w.phones if p.natural]
     return WordFeedback(w.word, band(w), tips)
 
 
-# How much a recurring problem matters for being understood. Consonant contrasts that
-# separate many word pairs (th, v/b, s/z, ship/sheep) rank above accent colouring such as
-# unreduced weak vowels, which sound foreign but rarely cause misunderstanding. This is a
-# first, hand-set version of intelligibility weighting; it grows with the teacher's judgement.
-PRIORITY: dict[str, float] = {
-    "ð": 3, "θ": 3, "v": 3, "b": 2, "ɪ": 2, "iː": 2, "æ": 2, "ʃ": 2, "s": 2, "z": 2, "h": 2, "dʒ": 2, "tʃ": 2,
-    "ŋ": 1.5, "ʌ": 1.5, "ɜː": 1.5, "ɝ": 1.5,
-    "ə": 0.5, "ɐ": 0.5, "ᵻ": 0.5, "ɚ": 0.5,
-}
-
-
 def summary(words: list[WordScore], max_items: int = 3) -> str:
-    """One paragraph a learner can act on: how many words were clear, and the sounds
-    that went wrong most often across the whole sentence."""
-    feedback = [word_feedback(w) for w in words]
-    clear = sum(f.clear for f in feedback)
-    n = len(feedback)
+    """One paragraph a learner can act on: how many words a listener caught, how many
+    were clear, and the sounds worth practising - split into those that cost
+    intelligibility and those that are just accent colouring."""
+    n = len(words)
     if n == 0:
         return "Nothing to score yet."
+    verdicts = [w.verdict for w in words]
+    understood = sum(1 for w in words if w.listener_p is None or w.understood)
+    clear = verdicts.count("clear")
     if clear == n:
         head = f"All {n} words were clear. Nice work!"
     else:
-        head = f"{clear} of {n} words were clear."
+        head = f"Understood: {understood} of {n} words. Clear: {clear}, accent notes: {verdicts.count('accent')}, " \
+               f"almost: {verdicts.count('almost')}, work on: {verdicts.count('work on this')}."
 
-    # Recurring problems, grouped by how the expected sound is described (so ə and ɐ are one
-    # line) and ranked by count x importance: "th" is one lesson whether it came out as z in
-    # one word and d in the next, and it outranks four unreduced vowels.
+    # Recurring deviations, grouped by how the expected sound is described (so ə and ɐ are one
+    # line) and ranked by count x importance. Sounds that matter for being understood go
+    # under "Work on"; the rest are accent notes.
     by_sound: dict[str, Counter[str]] = {}
     weight: dict[str, float] = {}
     for w in words:
@@ -131,17 +138,24 @@ def summary(words: list[WordScore], max_items: int = 3) -> str:
                 weight[key] = max(weight.get(key, 0.0), PRIORITY.get(p.expected, 1.0))
     if not by_sound:
         return head
-    ranked = sorted(by_sound.items(), key=lambda kv: -sum(kv[1].values()) * weight[kv[0]])
-    lines = []
-    for sound, heards in ranked[:max_items]:
+
+    def line(sound, heards):
         total = sum(heards.values())
         times = f" ({total} times)" if total > 1 else ""
         missing = heards.pop("(not heard)", 0)
         parts = [h for h, _ in heards.most_common(2)]
         if parts and missing:
-            lines.append(f"• {sound} came out as {' or '.join(parts)}, or was missing{times}")
-        elif parts:
-            lines.append(f"• {sound} came out as {' or '.join(parts)}{times}")
-        else:
-            lines.append(f"• {sound} was missing{times}")
-    return head + "\n\nSounds to practise:\n" + "\n".join(lines)
+            return f"• {sound} came out as {' or '.join(parts)}, or was missing{times}"
+        if parts:
+            return f"• {sound} came out as {' or '.join(parts)}{times}"
+        return f"• {sound} was missing{times}"
+
+    ranked = sorted(by_sound.items(), key=lambda kv: -sum(kv[1].values()) * weight[kv[0]])
+    work = [line(snd, Counter(h)) for snd, h in ranked if weight[snd] >= 2.0][:max_items]
+    notes = [line(snd, Counter(h)) for snd, h in ranked if weight[snd] < 2.0][:max_items]
+    out = head
+    if work:
+        out += "\n\nWork on:\n" + "\n".join(work)
+    if notes:
+        out += "\n\nAccent notes (understood, just not native-like):\n" + "\n".join(notes)
+    return out
