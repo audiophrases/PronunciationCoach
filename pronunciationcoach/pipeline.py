@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass, field
 
@@ -10,7 +11,7 @@ import numpy as np
 from .align import ExtraRun, Segment, align_words, greedy_decode
 from .asr import transcribe
 from .audio import duration_s, to_mono_16k
-from .boundaries import Span, phone_spans, word_spans
+from .boundaries import Span, word_spans
 from .engine import DEFAULT_MODEL, Emissions, get_engine
 from .g2p import text_to_phones
 from .scoring import WordScore, score_words
@@ -28,6 +29,8 @@ class Assessment:
     extra: list[ExtraRun]  # speech heard where the sentence has no word (repeats, hesitations)
     emissions: Emissions
     audio: np.ndarray  # the 16 kHz mono signal that was scored
+    spans: list[Span] = field(default_factory=list)  # where each word is, for replay
+    span_source: str = "spikes"  # "charsiu" (frame aligner) or "spikes" (fallback)
     unknown_phones: list[str] = field(default_factory=list)  # expected phones the model has no label for
     timings: dict[str, float] = field(default_factory=dict)
 
@@ -47,20 +50,8 @@ class Assessment:
         return out
 
     def word_spans(self) -> list[Span]:
-        """Where each word is in the recording (seconds), for replaying it. See boundaries.py."""
-        return word_spans(
-            self.audio,
-            self.segments_by_word(),
-            [[p.dropped for p in w.phones] for w in self.words],
-            self.emissions.frame_ms,
-        )
-
-    def phone_spans(self) -> list[list[Span | None]]:
-        """Per word, where each of its phones is (None for phones that were not produced)."""
-        return [
-            phone_spans(span, segs, [p.dropped for p in w.phones], self.emissions.frame_ms)
-            for span, segs, w in zip(self.word_spans(), self.segments_by_word(), self.words)
-        ]
+        """Where each word is in the recording (seconds), for replaying it."""
+        return self.spans
 
     def extra_text(self, min_phones: int = 2) -> str:
         """Human-readable list of the extra runs, e.g. 'ɔ z ə z (7.5–8.4 s)'."""
@@ -122,6 +113,10 @@ def assess(
     words = score_words(em, segments, counts)
     timings["align+score"] = time.perf_counter() - t0
 
+    t0 = time.perf_counter()
+    spans, span_source = locate_words(audio, word_phones, words, segments, alignment.extra, em.frame_ms)
+    timings["crop"] = time.perf_counter() - t0
+
     return Assessment(
         text=text,
         transcribed=transcribed,
@@ -133,6 +128,50 @@ def assess(
         extra=alignment.extra,
         emissions=em,
         audio=audio,
+        spans=spans,
+        span_source=span_source,
         unknown_phones=unknown,
         timings=timings,
     )
+
+
+# How far a word may extend beyond its spikes in the frame aligner: spikes lag onsets by
+# ~80 ms and a final consonant can outlast its last spike.
+WINDOW_BEFORE_S = 0.25
+WINDOW_AFTER_S = 0.25
+
+
+def locate_words(audio, word_phones, words, segments, extra, frame_ms) -> tuple[list[Span], str]:
+    """Word crops from Charsiu's frame aligner, anchored to the scoring aligner's spikes so
+    repeats and hesitations (the wildcard runs) cannot be swallowed by a neighbouring word.
+    Falls back to the spike-based estimate if the aligner is unavailable."""
+    by_word, cursor = [], 0
+    for w in words:
+        by_word.append(segments[cursor : cursor + len(w.phones)])
+        cursor += len(w.phones)
+    dropped = [[p.dropped for p in w.phones] for w in words]
+    frame_s = frame_ms / 1000.0
+
+    def kept(i):
+        segs = [s for s, d in zip(by_word[i], dropped[i]) if not d]
+        return segs or by_word[i]
+
+    try:
+        from .segmenter import get_segmenter, to_arpabet
+
+        seg = get_segmenter()
+        windows = []
+        for i in range(len(by_word)):
+            lo = kept(i)[0].start * frame_s - WINDOW_BEFORE_S
+            hi = kept(i)[-1].end * frame_s + WINDOW_AFTER_S
+            if i > 0:
+                lo = max(lo, kept(i - 1)[-1].start * frame_s)  # not before the previous word's last spike
+            if i + 1 < len(by_word):
+                hi = min(hi, kept(i + 1)[0].end * frame_s)  # not past the next word's first spike
+            windows.append((max(0.0, lo), hi))
+        extras = [(r.start * frame_s, r.end * frame_s) for r in extra if len(r.phones) >= 2]
+        spans = seg.align(seg.frame_log_probs(audio), [to_arpabet(wp.phones) for wp in word_phones], windows, extras)
+        return spans, "charsiu"
+    except Exception as exc:  # model not downloadable, out of memory, ...
+        logging.getLogger("pronunciationcoach").warning("Charsiu segmenter unavailable (%s); using spike-based crops", exc)
+    return word_spans(audio, by_word, dropped, frame_ms), "spikes"

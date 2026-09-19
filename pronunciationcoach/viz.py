@@ -95,19 +95,19 @@ def timeline_figure(result, max_seconds: float = 20.0):
     ax_e.set_ylim(min(db.min(), thr - 10), max(db.max() + 5, thr + 10))
 
     spans = result.word_spans()
-    p_spans = result.phone_spans()
-    for k, (w, span, segs, ps) in enumerate(zip(result.words, spans, result.segments_by_word(), p_spans)):
+    for k, (w, span, segs) in enumerate(zip(result.words, spans, result.segments_by_word())):
         shade = "#e8f4ea" if w.category == "good" else ("#fff4d6" if w.category == "unsure" else "#fbe3e0")
         for ax in (ax_wave, ax_align):
             ax.axvspan(span.start, span.end, color=shade, zorder=0)
         ax_align.text((span.start + span.end) / 2, 0.98 if k % 2 == 0 else 0.86, w.word, ha="center", va="top", fontsize=9, fontweight="bold")
-        for p, seg, pspan in zip(w.phones, segs, ps):
+        for p, seg in zip(w.phones, segs):
             s0, s1 = result.emissions.frame_to_s(seg.start), result.emissions.frame_to_s(seg.end)
             face = "white" if p.dropped else colors[p.category]
             ax_align.bar((s0 + s1) / 2, 0.45, width=max(s1 - s0, 0.01), bottom=0.05, color=face, edgecolor=colors[p.category], linewidth=1.2, zorder=3)
-            if pspan is not None:
-                ax_align.plot([pspan.start, pspan.start], [0.0, 0.55], color="#555", linewidth=0.6, zorder=2)
-                ax_align.text((pspan.start + pspan.end) / 2, 0.58, p.expected, ha="center", va="bottom", fontsize=7, color="#333")
+            ax_align.text((s0 + s1) / 2, 0.52, p.expected, ha="center", va="bottom", fontsize=7, color="#333")
+        for ax in (ax_wave, ax_align):
+            ax.axvline(span.start, color="#333", linewidth=0.8, zorder=2)
+            ax.axvline(span.end, color="#333", linewidth=0.8, linestyle="--", zorder=2)
     for run in result.extra:
         a, b = result.emissions.frame_to_s(run.start), result.emissions.frame_to_s(run.end)
         ax_align.axvspan(a, b, color="#ddd", alpha=0.6, zorder=0)
@@ -115,6 +115,6 @@ def timeline_figure(result, max_seconds: float = 20.0):
     ax_align.set_ylim(0, 1)
     ax_align.set_yticks([])
     ax_align.set_xlabel("time (s)")
-    ax_align.set_title("spikes (filled = scored sound, hollow = not heard) · ticks = phone onsets · shading = word crops", fontsize=8)
+    ax_align.set_title(f"spikes (filled = scored sound, hollow = not heard) · shading and lines = word crops ({result.span_source})", fontsize=8)
     fig.tight_layout()
     return fig

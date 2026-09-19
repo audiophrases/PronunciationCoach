@@ -28,14 +28,16 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
 
 * **Learner view** – a score ring, the sentence as tappable word chips (clear / almost /
   work on this), one player that speaks whatever you tap: the whole sentence (you, the model,
-  the model slowly), one word, or one sound inside a word, each with a line of plain-language
-  advice. The model voice is Microsoft Edge's neural TTS via `edge-tts` (cached in `tts_cache/`;
-  falls back to espeak-ng offline). Everything technical sits in a collapsed
+  the model slowly) or one word, with a line of plain-language advice per sound that needs work.
+  The model voice is Microsoft Edge's neural TTS via `edge-tts` (cached in `tts_cache/`; falls
+  back to espeak-ng offline). Everything technical sits in a collapsed
   "Technical details (for teachers)" section: timeline, IPA, per-phone table, posterior heatmap.
-* **Crops** – word and sound clips are placed with measured constants (see `boundaries.py`):
-  the recogniser's spike starts ~80 ms after a sound begins, so onsets are shifted back by that,
-  and touching words are cut at the quietest point between them. Against Edge TTS word
-  boundaries the crops are within ~25 ms (start) / ~30 ms (end) of the truth.
+* **Word crops** – a second, small model does the cropping: Charsiu's frame-level phonetic
+  aligner (`charsiu/en_w2v2_fc_10ms`, ~380 MB) labels every 10 ms with a phone or silence, and a
+  Viterbi (`segmenter.py`) fits the expected words to it, anchored to the scoring model's spikes so
+  repeats and hesitations are excluded. Against Edge TTS word boundaries the crops are within
+  ~17 ms (start) / ~23 ms (end) of the truth; `scripts/calibrate_spikes.py` reproduces the numbers.
+  If that model is unavailable the spike-based estimate in `boundaries.py` is used instead.
 * **Known-sentence mode** – you type the sentence; the word-recognition step is skipped.
 * **Free-speech mode** – leave the text empty; Whisper finds the words the learner *meant*,
   and the phoneme track shows what they *said*.
@@ -79,7 +81,8 @@ uv run python app.py                  # Gradio UI on http://127.0.0.1:7860
 On Windows, install espeak-ng with `winget install eSpeak-NG.eSpeak-NG`; the code finds the
 DLL in `C:\Program Files\eSpeak NG` automatically.
 
-Memory: the phoneme model (~1.4 GB) plus Whisper `base.en` (~1.2 GB) need about 3 GB free.
+Memory: the phoneme model (~1.4 GB) plus the cropping model (~0.4 GB) plus Whisper `base.en`
+(~1.2 GB, free-speech mode only) need up to 3.5 GB free.
 On an 8 GB machine, let Windows manage the page file size and close browser tabs you don't need.
 
 ## Deploying
@@ -98,6 +101,7 @@ tested against. Until then, the app runs on the teacher's own machine.
 | Phoneme recogniser | `facebook/wav2vec2-lv-60-espeak-cv-ft` | Multilingual espeak-IPA labels, so non-English phones a learner produces are visible |
 | Word recogniser | faster-whisper `base.en` int8 (`PC_ASR_MODEL=small.en` on the Space) | Free-speech mode only; ctranslate2 keeps ~1.2 GB / ~2.3 GB resident for these |
 | G2P | espeak-ng (`en-us` / `en-gb`) | Same phone alphabet as the recogniser |
+| Word cropping | `charsiu/en_w2v2_fc_10ms` + `charsiu/tokenizer_en_cmu` | Frame-level phonetic aligner; downloaded on first use |
 
 ## Status
 

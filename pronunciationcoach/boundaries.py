@@ -1,12 +1,11 @@
-"""Where each word and phone really is in the recording, for cropping and replay.
+"""Word crops from the scoring model's spikes - the fallback when Charsiu is unavailable.
 
 A CTC recogniser marks a phone with a brief spike somewhere inside it, not at
 its edges. Measured against Edge TTS word boundaries on synthesised speech
 (scripts/calibrate_spikes, 29 words): the first spike of a word starts a very
 steady ~80 ms after the word begins (p10 63 ms, p90 106 ms), and the audio of
 a word ends within ~60 ms after its last spike ends. Inside a word the spikes
-follow one another every ~60 ms, so "spike start minus 80 ms" is a usable onset
-for every phone.
+follow one another every ~60 ms.
 
 Connected speech has no silence between words. When two words' estimated spans
 overlap, the cut goes at the quietest 10 ms between the last spike of one word
@@ -114,19 +113,3 @@ def word_spans(
         if ends[i] - starts[i] < 0.05:
             ends[i] = min(duration, starts[i] + 0.05)
     return [Span(s, e) for s, e in zip(starts, ends)]
-
-
-def phone_spans(word_span: Span, segs: list[Segment], drop: list[bool], frame_ms: float) -> list[Span | None]:
-    """Phone spans inside one word: each runs from its own estimated onset to the next
-    phone's onset; the last one to the end of the word. Dropped phones get None."""
-    onsets: list[float | None] = []
-    for s, d in zip(segs, drop):
-        onsets.append(None if d else min(max(_t(s.start, frame_ms) - SPIKE_LAG_S, word_span.start), word_span.end))
-    out: list[Span | None] = []
-    for i, on in enumerate(onsets):
-        if on is None:
-            out.append(None)
-            continue
-        nxt = next((o for o in onsets[i + 1 :] if o is not None), word_span.end)
-        out.append(Span(on, max(nxt, on + 0.03)))
-    return out

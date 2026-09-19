@@ -1,8 +1,8 @@
 """Gradio front end.
 
 Learner view: a score ring, the sentence as tappable word chips, one player that
-speaks whatever was tapped (you, the model, one word, one sound), and a word
-panel with the word's sounds as tappable pills and one line of advice each.
+speaks whatever was tapped (you, the model, one word), and a word panel with
+one line of advice per sound that needs work.
 Teacher view: everything technical (timeline, IPA, per-phone table, posterior
 heatmap) in a collapsed section underneath.
 """
@@ -21,7 +21,7 @@ from pronunciationcoach import SAMPLE_RATE
 from pronunciationcoach.asr import DEFAULT_ASR
 from pronunciationcoach.audio import to_mono_16k
 from pronunciationcoach.engine import DEFAULT_MODEL
-from pronunciationcoach.feedback import BAND_COLOR, phone_tip, sound_pills, summary, word_feedback
+from pronunciationcoach.feedback import BAND_COLOR, phone_tip, summary, word_feedback
 from pronunciationcoach.g2p import ACCENTS, DEFAULT_ACCENT
 from pronunciationcoach.logs import DEBUG, LOG_FILE, SAVE_RECORDINGS, log_assessment, setup_logging
 from pronunciationcoach.pipeline import assess
@@ -41,10 +41,6 @@ CSS = """
 #sentence .token.highlighted { padding: .38rem .75rem; border-radius: .75rem; margin: 0 .12rem;
     cursor: pointer; font-weight: 600; transition: transform .08s; }
 #sentence .token.highlighted:hover { transform: scale(1.06); }
-#sounds .textfield { line-height: 2.6; font-size: 1.3rem; }
-#sounds .token.highlighted { padding: .3rem .65rem; border-radius: .65rem; margin: 0 .1rem;
-    cursor: pointer; font-weight: 600; font-family: ui-monospace, Menlo, Consolas, monospace; }
-#sounds .token.highlighted:hover { transform: scale(1.06); }
 .score-card { display: flex; gap: 1.2rem; align-items: center; padding: .6rem .2rem; }
 .score-card .ring { width: 110px; height: 110px; flex: none; }
 .score-card .ring .bg { fill: none; stroke: #e6e6e6; stroke-width: 3.2; }
@@ -143,7 +139,6 @@ def run(audio, text, accent_name, l1):
         note += "<span class='hint'>Some repeated or hesitated parts were ignored.</span>"
 
     w_spans = result.word_spans()
-    p_spans = result.phone_spans()
     state = {
         "lang": lang,
         "text": result.text,
@@ -154,13 +149,11 @@ def run(audio, text, accent_name, l1):
                 "word": w.word,
                 "band": f.band,
                 "span": (sp.start, sp.end),
-                "pills": sound_pills(w),
-                "phone_spans": [None if s is None else (s.start, s.end) for s in ps],
-                "tips": [phone_tip(p, w.word) if p.category != "good" else "" for p in w.phones],
+                "tips": [phone_tip(p, w.word) for p in w.phones if p.category != "good"],
                 "expected": [p.expected for p in w.phones],
                 "heard": [p.heard_label for p in w.phones],
             }
-            for w, f, sp, ps in zip(result.words, feedback, w_spans, p_spans)
+            for w, f, sp in zip(result.words, feedback, w_spans)
         ],
         "current": None,
     }
@@ -172,14 +165,14 @@ def run(audio, text, accent_name, l1):
             ipa_hl.append((p.expected, p.category))
         ipa_hl.append(("  ", None))
     rows = []
-    for word, ps in zip(result.words, p_spans):
-        for i, (p, s) in enumerate(zip(word.phones, ps)):
+    for word, sp in zip(result.words, w_spans):
+        for i, p in enumerate(word.phones):
             rows.append(
                 [
                     word.word if i == 0 else "",
+                    f"{sp.start:.2f}-{sp.end:.2f}" if i == 0 else "",
                     p.expected,
                     f"{p.start_s:.2f}",
-                    "" if s is None else f"{s.start:.2f}-{s.end:.2f}",
                     f"{p.gop:.2f}",
                     f"{p.posterior:.2f}",
                     p.heard_label,
@@ -192,6 +185,7 @@ def run(audio, text, accent_name, l1):
         f"Heard, text-independent: {result.heard_text}\n"
         + (f"Heard but not in the sentence: {result.extra_text()}\n" if result.extra_text() else "")
         + (f"No model label for: {' '.join(result.unknown_phones)}\n" if result.unknown_phones else "")
+        + f"Word crops: {result.span_source}\n"
         + f"{result.duration_s:.1f} s of audio · {timing}"
     )
 
@@ -257,37 +251,16 @@ def _index(evt: gr.SelectData) -> int | None:
 def pick_word(evt: gr.SelectData, state):
     """Tap a word: open its panel and immediately play how it was said."""
     idx = _index(evt)
-    nothing = (gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), state)
+    nothing = (gr.update(), gr.update(), gr.update(), gr.update(), state)
     if not state or idx is None or idx >= len(state["word_index"]) or state["word_index"][idx] is None:
         return nothing
     i = state["word_index"][idx]
     w = state["words"][i]
     state["current"] = i
-    pills = []
-    for label, band in w["pills"]:
-        pills.append((label, band))
-        pills.append((" ", None))
     title = f"### {w['word']} — {w['band']}"
-    tips = [t for t in w["tips"] if t]
-    body = "\n".join(f"- {t}" for t in tips) if tips else "This word sounded clear. Tap a sound to hear just that part."
+    body = "\n".join(f"- {t}" for t in w["tips"]) if w["tips"] else "This word sounded clear."
     body += f"\n\n<span class='hint'>expected /{' '.join(w['expected'])}/ · heard /{' '.join(w['heard'])}/</span>"
-    return gr.update(visible=True), title, pills, body, clip(state["audio"], *w["span"]), state
-
-
-def pick_sound(evt: gr.SelectData, state):
-    """Tap a sound pill: play just that sound (with a little context) and show its advice."""
-    idx = _index(evt)
-    w = _current(state)
-    if not w or idx is None:
-        return gr.update(), gr.update()
-    j = idx // 2  # pills alternate with separators
-    if j >= len(w["pills"]):
-        return gr.update(), gr.update()
-    span = w["phone_spans"][j]
-    tip = w["tips"][j] or f"The {w['pills'][j][0]!r} sound in *{w['word']}* was clear."
-    if span is None:
-        return clip(state["audio"], *w["span"]), f"- {tip}"
-    return clip(state["audio"], span[0], span[1], pad=0.04), f"- {tip}"
+    return gr.update(visible=True), title, body, clip(state["audio"], *w["span"]), state
 
 
 with gr.Blocks(title="Pronunciation Coach") as demo:
@@ -322,13 +295,6 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
 
     with gr.Group(visible=False) as word_panel:
         word_title = gr.Markdown()
-        sounds_hl = gr.HighlightedText(
-            label="Tap a sound to hear just that part",
-            color_map=BAND_COLOR,
-            show_legend=False,
-            show_inline_category=False,
-            elem_id="sounds",
-        )
         with gr.Row():
             btn_word_you = gr.Button("▶ You said this word")
             btn_word_model = gr.Button("▶ Model says it slowly")
@@ -343,7 +309,7 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
             show_legend=True,
         )
         table = gr.Dataframe(
-            headers=["word", "phone", "spike (s)", "crop (s)", "GOP", "posterior", "heard", "top-3 candidates"],
+            headers=["word", "word crop (s)", "phone", "spike (s)", "GOP", "posterior", "heard", "top-3 candidates"],
             label="Per-phone detail",
             wrap=True,
         )
@@ -355,8 +321,7 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
         [audio, text, accent, l1],
         [card, note, words_hl, state, player, word_panel, tech_text, timeline, ipa_hl, table, plot],
     )
-    words_hl.select(pick_word, [state], [word_panel, word_title, sounds_hl, word_tips, player, state])
-    sounds_hl.select(pick_sound, [state], [player, word_tips])
+    words_hl.select(pick_word, [state], [word_panel, word_title, word_tips, player, state])
     btn_you.click(play_you, [state], [player])
     btn_model.click(play_model, [state], [player])
     btn_slow.click(play_slow, [state], [player])
