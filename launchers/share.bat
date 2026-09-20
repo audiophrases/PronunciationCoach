@@ -27,15 +27,20 @@ gh auth status >nul 2>&1 || (
     )
 )
 
-rem Students' recordings are scored here and not kept: normal mode, no archive.
-set "PC_DEBUG=0"
-set "PC_SAVE_RECORDINGS=0"
+rem Everything is kept for review afterwards, as with run_app_debug.bat: every assessment
+rem with its per-phone detail in logs\app.log, every recording in recordings\ (wav + json),
+rem and the session itself (addresses, start/stop, tunnel messages) in logs\share.log.
+set "PC_DEBUG=1"
+set "PC_SAVE_RECORDINGS=1"
 call "%~dp0_free_port.bat"
 
 echo Starting the coach and sharing it. Students open the fixed address shown below.
+echo   session log : logs\share.log
+echo   app log     : logs\app.log
+echo   recordings  : recordings\
 echo Keep this window open during the session. Press Ctrl+C to stop sharing.
 echo.
 uv run python scripts\share.py
 echo.
-echo Sharing has stopped.
+echo Sharing has stopped. The session is in logs\share.log ^(open_logs.bat shows everything^).
 pause

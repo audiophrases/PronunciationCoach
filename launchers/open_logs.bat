@@ -8,4 +8,5 @@ if exist "logs\app.log" (
     echo No log yet - run the app first. Log will appear at logs\app.log
     pause
 )
+if exist "logs\share.log" start "" notepad "logs\share.log"
 if exist "recordings" start "" explorer "recordings"

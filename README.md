@@ -81,8 +81,8 @@ Everything in `launchers\` is a plain `.bat` file:
 | `run_app.bat` | Starts the coach and opens it in your browser. Keep the window open; close it to stop |
 | `score_recording.bat` | Drag a recording onto it, type the sentence (or press Enter for free speech), get the phone table and heatmap |
 | `run_app_debug.bat` | Same as `run_app.bat`, plus the full per-phone table in the log and every recording archived in `recordings\` (wav + json) |
-| `open_logs.bat` | Opens `logs\app.log` in Notepad and the `recordings\` folder |
-| `share.bat` | Starts the coach and shares it with students: a Cloudflare tunnel exposes it, and the fixed address `https://audiophrases.github.io/PronunciationCoach/` forwards to this session. Keep the window open |
+| `open_logs.bat` | Opens `logs\app.log` (and `logs\share.log` if there is one) in Notepad and the `recordings\` folder |
+| `share.bat` | Starts the coach and shares it with students: a Cloudflare tunnel exposes it, and the fixed address `https://audiophrases.github.io/PronunciationCoach/` forwards to this session. Keeps everything like `run_app_debug.bat` does, plus a session log in `logs\share.log`. Keep the window open |
 | `stop_sharing.bat` | Ends the sharing session cleanly and marks the fixed address "closed" |
 
 The app always writes one line per assessment to `logs\app.log` (mode, text, what was heard, flagged
@@ -140,9 +140,16 @@ its published site.
    to practise with meanwhile. `stop_sharing.bat` (or Ctrl+C) marks it closed.
 
 The front door reads the file from the GitHub API first (fresh within a minute) because GitHub Pages
-itself caches files for ten minutes. Sessions run in normal mode (recordings are scored and discarded,
-not archived). One recording is scored at a time, ~10-20 s each on this laptop: fine for homework or a
-small group, not for a whole class pressing the button at once. The laptop must stay awake and online.
+itself caches files for ten minutes. One recording is scored at a time, ~10-20 s each on this laptop:
+fine for homework or a small group, not for a whole class pressing the button at once. The laptop must
+stay awake and online.
+
+A sharing session keeps a full record for review afterwards, the same as `run_app_debug.bat`: every
+assessment with its per-phone detail in `logs\app.log` and every student recording archived in
+`recordings\` (wav + json, replayable with `score_recording.bat` and audited by `scripts/crop_check.py`).
+The session itself goes to `logs\share.log`: which machine and version ran, the addresses, when it
+opened and closed and why, what cloudflared reported, and a closing line with how many assessments
+and recordings the session produced. Students' recordings stay on the sharing machine; tell them.
 
 ## Deploying
 
