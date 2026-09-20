@@ -35,9 +35,16 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
 * **Word crops** – a second, small model does the cropping: Charsiu's frame-level phonetic
   aligner (`charsiu/en_w2v2_fc_10ms`, ~380 MB) labels every 10 ms with a phone or silence, and a
   Viterbi (`segmenter.py`) fits the expected words to it, anchored to the scoring model's spikes so
-  repeats and hesitations are excluded. Against Edge TTS word boundaries the crops are within
-  ~17 ms (start) / ~23 ms (end) of the truth; `scripts/calibrate_spikes.py` reproduces the numbers.
-  If that model is unavailable the spike-based estimate in `boundaries.py` is used instead.
+  repeats and hesitations are excluded. On real recordings Charsiu places word onsets late (a
+  quiet initial consonant gets labelled as the previous sound), so each start is reconciled with
+  the scoring model's spike onset and leading background noise is trimmed (`pipeline.py`).
+  `scripts/crop_check.py` audits every archived recording: which of the recogniser's sounds each
+  crop contains, which of the word's own it misses, which of the neighbours' it bleeds. Current
+  result on the archive: 1 % of sounds clipped, no bleed. Against Edge TTS word boundaries the raw
+  Charsiu crops are within ~17 / ~23 ms; `scripts/calibrate_spikes.py` reproduces that.
+  If Charsiu is unavailable the spike-based estimate in `boundaries.py` is used instead.
+  Playback clips take the recording at its original rate, add 60/40 ms of context, 10 ms fades and
+  a level boost; "You, slowed down" plays the same clip at 70 % speed (ffmpeg atempo).
 * **Speech, not dictionary words** – three things stop natural, connected speech from being
   penalised. (1) *Native reference by example*: the sentence is synthesised with two natural
   voices and run through our own recogniser, and whatever it hears a native do in that position

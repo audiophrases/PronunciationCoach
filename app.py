@@ -116,10 +116,47 @@ def sound_guides(word) -> list[dict]:
     return guides
 
 
-def clip(audio: np.ndarray, start: float, end: float, pad: float = 0.0) -> tuple[int, np.ndarray]:
-    a = max(0, int((start - pad) * SAMPLE_RATE))
-    b = min(len(audio), int((end + pad) * SAMPLE_RATE))
-    return SAMPLE_RATE, audio[a:b]
+# What a learner hears when a word is played back: the crop from the original recording, a
+# touch of context on both sides (a hard cut at the exact boundary sounds chopped), short
+# fades against clicks, and a level boost - class recordings are usually quiet.
+PAD_BEFORE_S = 0.06
+PAD_AFTER_S = 0.04
+FADE_S = 0.01
+TARGET_PEAK = 0.7
+MAX_GAIN = 8.0
+
+
+def clip(audio: np.ndarray, start: float, end: float, sr: int = SAMPLE_RATE) -> tuple[int, np.ndarray]:
+    a = max(0, int((start - PAD_BEFORE_S) * sr))
+    b = min(len(audio), int((end + PAD_AFTER_S) * sr))
+    out = np.array(audio[a:b], dtype=np.float32)
+    n = min(int(FADE_S * sr), len(out) // 2)
+    if n > 0:
+        ramp = 0.5 - 0.5 * np.cos(np.linspace(0, np.pi, n, dtype=np.float32))
+        out[:n] *= ramp
+        out[-n:] *= ramp[::-1]
+    peak = float(np.abs(out).max()) if len(out) else 0.0
+    if peak > 0:
+        out *= min(TARGET_PEAK / peak, MAX_GAIN)
+    return sr, out
+
+
+def slowed(sr: int, samples: np.ndarray, tempo: float = 0.7) -> str | None:
+    """The same clip at 70 % speed, pitch preserved (ffmpeg's atempo), for hearing your own word."""
+    import subprocess
+    import tempfile
+
+    import soundfile as sf
+
+    src = Path(tempfile.gettempdir()) / f"coach_clip_{os.getpid()}.wav"
+    dst = src.with_name(f"coach_clip_{os.getpid()}_slow.wav")
+    sf.write(src, samples, sr)
+    try:
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-filter:a", f"atempo={tempo}", str(dst)], check=True, capture_output=True)
+        return str(dst)
+    except Exception as exc:
+        log.warning("could not slow the clip (%s)", exc)
+        return None
 
 
 def score_card_html(words, summary_text: str) -> str:
@@ -192,10 +229,16 @@ def run(audio, text, accent_name, l1):
         note += "<span class='hint'>Some repeated or hesitated parts were ignored.</span>"
 
     w_spans = result.word_spans()
+    orig = np.asarray(samples, dtype=np.float32)
+    if orig.ndim == 2:
+        orig = orig.mean(axis=1)
+    if np.issubdtype(np.asarray(samples).dtype, np.integer):
+        orig = orig / np.iinfo(np.asarray(samples).dtype).max
     state = {
         "lang": lang,
         "text": result.text,
         "audio": audio16k,
+        "orig": (int(sr), orig),  # the recording as it came in, for playback
         "word_index": word_index,
         "words": [
             {
@@ -285,9 +328,22 @@ def _current(state):
     return None
 
 
+def _word_clip(state, w):
+    sr, orig = state.get("orig", (SAMPLE_RATE, state["audio"]))
+    return clip(orig, *w["span"], sr=sr)
+
+
 def play_word_you(state):
     w = _current(state)
-    return clip(state["audio"], *w["span"]) if w else None
+    return _word_clip(state, w) if w else None
+
+
+def play_word_you_slow(state):
+    w = _current(state)
+    if not w:
+        return None
+    sr, samples = _word_clip(state, w)
+    return slowed(sr, samples)
 
 
 def play_word_model(state):
@@ -322,7 +378,7 @@ def pick_word(evt: gr.SelectData, state):
         gr.update(visible=True),
         title,
         body,
-        clip(state["audio"], *w["span"]),
+        _word_clip(state, w),
         state,
         gr.update(visible=bool(guides)),
         gr.update(choices=labels, value=labels[0] if labels else None),
@@ -386,6 +442,7 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
         word_title = gr.Markdown()
         with gr.Row():
             btn_word_you = gr.Button("▶ You said this word")
+            btn_word_you_slow = gr.Button("▶ You, slowed down")
             btn_word_model = gr.Button("▶ Model says it slowly")
         word_tips = gr.Markdown()
         with gr.Group(visible=False) as guide_panel:
@@ -425,6 +482,7 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
     btn_model.click(play_model, [state], [player])
     btn_slow.click(play_slow, [state], [player])
     btn_word_you.click(play_word_you, [state], [player])
+    btn_word_you_slow.click(play_word_you_slow, [state], [player])
     btn_word_model.click(play_word_model, [state], [player])
 
 if __name__ == "__main__":

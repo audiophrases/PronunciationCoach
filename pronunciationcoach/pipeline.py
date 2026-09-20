@@ -13,7 +13,7 @@ from .align import ExtraRun, Segment, align_words, greedy_decode
 from .asr import transcribe_words
 from .listener import match_words
 from .audio import duration_s, to_mono_16k
-from .boundaries import Span, word_spans
+from .boundaries import HOP, SPIKE_LAG_S, Span, energy_db, word_spans
 from .engine import DEFAULT_MODEL, Emissions, get_engine
 from .g2p import text_to_phones
 from .reference import acceptances, native_reference
@@ -203,7 +203,50 @@ def locate_words(audio, word_phones, words, segments, extra, frame_ms) -> tuple[
             windows.append((max(0.0, lo), hi))
         extras = [(r.start * frame_s, r.end * frame_s) for r in extra if len(r.phones) >= 2]
         spans = seg.align(seg.frame_log_probs(audio), [to_arpabet(wp.phones) for wp in word_phones], windows, extras)
-        return spans, "charsiu"
+        spans = reconcile(spans, [kept(i) for i in range(len(by_word))], frame_s)
+        return trim_leading_silence(spans, [kept(i) for i in range(len(by_word))], audio, frame_s), "charsiu"
     except Exception as exc:  # model not downloadable, out of memory, ...
         logging.getLogger("pronunciationcoach").warning("Charsiu segmenter unavailable (%s); using spike-based crops", exc)
     return word_spans(audio, by_word, dropped, frame_ms), "spikes"
+
+
+# On real recordings Charsiu tends to place a word's onset late (a quiet initial consonant gets
+# labelled as the previous sound), which clips the very sound a learner listens for. The scoring
+# model's spikes are more robust there: a sound starts ~SPIKE_LAG_S before its spike.
+ONSET_SLACK_S = 0.02
+OVERLAP_S = 0.04  # a word may start this much before the previous word's last spike ends
+
+
+def reconcile(spans: list[Span], kept: list[list[Segment]], frame_s: float) -> list[Span]:
+    """Pull each word's start back to its first spike's onset when Charsiu put it later, and
+    keep the previous word from running past that point."""
+    out = [Span(sp.start, sp.end) for sp in spans]
+    for i, (sp, segs) in enumerate(zip(out, kept)):
+        onset = segs[0].start * frame_s - SPIKE_LAG_S - ONSET_SLACK_S
+        if onset < sp.start:
+            floor = kept[i - 1][-1].end * frame_s - OVERLAP_S if i > 0 else 0.0  # not into the previous word's last sound
+            sp.start = max(onset, floor, 0.0)
+            if i > 0 and out[i - 1].end > sp.start:
+                out[i - 1].end = sp.start
+        if sp.end < sp.start + 0.03:
+            sp.end = sp.start + 0.03
+    return out
+
+
+SILENCE_ABOVE_FLOOR_DB = 6.0  # below this the frame is background, not a quiet consonant
+MAX_TRIM_S = 0.12
+
+
+def trim_leading_silence(spans: list[Span], kept: list[list[Segment]], audio: np.ndarray, frame_s: float) -> list[Span]:
+    """After a pause a crop can begin with background noise: shave it, but only true silence
+    (near the noise floor), never past the first sound's onset, and at most MAX_TRIM_S."""
+    db = energy_db(audio)
+    thr = float(np.percentile(db, 10)) + SILENCE_ABOVE_FLOOR_DB
+    step = HOP / 16000.0
+    for sp, segs in zip(spans, kept):
+        limit = min(segs[0].start * frame_s - SPIKE_LAG_S, sp.start + MAX_TRIM_S)
+        t = sp.start
+        while t + step <= limit and db[min(int(t / step), len(db) - 1)] < thr:
+            t += step
+        sp.start = t
+    return spans
