@@ -18,6 +18,15 @@ where cloudflared >nul 2>&1 || if not exist "%ProgramFiles(x86)%\cloudflared\clo
     set "PATH=%ProgramFiles(x86)%\cloudflared;%PATH%"
 )
 
+rem The session address is published through the GitHub CLI; sign in once on this machine.
+where gh >nul 2>&1 || set "PATH=%ProgramFiles%\GitHub CLI;%PATH%"
+gh auth status >nul 2>&1 || (
+    echo Signing in to GitHub ^(needed once, to publish the coach address on the fixed page^) ...
+    gh auth login --hostname github.com --git-protocol https --web || (
+        echo Could not sign in to GitHub. Students can still use the session address printed below.
+    )
+)
+
 rem Students' recordings are scored here and not kept: normal mode, no archive.
 set "PC_DEBUG=0"
 set "PC_SAVE_RECORDINGS=0"

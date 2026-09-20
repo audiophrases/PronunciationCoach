@@ -5,38 +5,52 @@ title Pronunciation Coach - setup
 
 echo ============================================================
 echo  Pronunciation Coach - first-time setup
-echo  Installs uv, espeak-ng and ffmpeg if missing, the Python
-echo  packages, and downloads the models (about 1.5 GB).
+echo  Installs uv, espeak-ng, ffmpeg, cloudflared and the GitHub CLI if
+echo  missing, the Python packages, and downloads the models (about 2 GB).
 echo ============================================================
 echo.
 
 where uv >nul 2>&1 || (
-    echo [1/5] Installing uv ...
+    echo [1/7] Installing uv ...
     powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://astral.sh/uv/install.ps1 | iex" || goto :fail
 )
-echo [1/5] uv OK
+echo [1/7] uv OK
 
 if not exist "%ProgramFiles%\eSpeak NG\libespeak-ng.dll" (
-    echo [2/5] Installing espeak-ng ... ^(approve the Windows prompt if one appears^)
+    echo [2/7] Installing espeak-ng ... ^(approve the Windows prompt if one appears^)
     winget install --id eSpeak-NG.eSpeak-NG --exact --accept-package-agreements --accept-source-agreements || goto :fail
 )
-echo [2/5] espeak-ng OK
+echo [2/7] espeak-ng OK
 
 where ffmpeg >nul 2>&1 || (
-    echo [3/5] Installing ffmpeg ...
+    echo [3/7] Installing ffmpeg ...
     winget install --id Gyan.FFmpeg --exact --accept-package-agreements --accept-source-agreements || goto :fail
     echo       ffmpeg installed. It will be on PATH the next time you open a launcher.
 )
-echo [3/5] ffmpeg OK
+echo [3/7] ffmpeg OK
 
-echo [4/5] Installing Python packages ...
-uv sync || goto :fail
+where cloudflared >nul 2>&1 || if not exist "%ProgramFiles(x86)%\cloudflared\cloudflared.exe" (
+    echo [4/7] Installing cloudflared ^(for share.bat^) ...
+    winget install --id Cloudflare.cloudflared --exact --accept-package-agreements --accept-source-agreements || goto :fail
+)
+echo [4/7] cloudflared OK
 
-echo [5/5] Downloading the models and scoring a test sentence ...
+where gh >nul 2>&1 || (
+    echo [5/7] Installing the GitHub CLI ^(for share.bat^) ...
+    winget install --id GitHub.cli --exact --accept-package-agreements --accept-source-agreements || goto :fail
+    set "PATH=%ProgramFiles%\GitHub CLI;%PATH%"
+)
+echo [5/7] GitHub CLI OK
+
+echo [6/7] Installing Python packages ...
+uv sync --extra dev || goto :fail
+
+echo [7/7] Downloading the models and scoring a test sentence ...
 uv run python scripts\smoke_test.py || goto :fail
 
 echo.
-echo Setup complete. Double-click run_app.bat to start the coach.
+echo Setup complete. Double-click run_app.bat to use the coach here,
+echo or share.bat to open it to students (it signs in to GitHub the first time).
 pause
 exit /b 0
 

@@ -108,6 +108,16 @@ the listener) together need about 3.5 GB free; if Whisper cannot load, verdicts 
 severity only.
 On an 8 GB machine, let Windows manage the page file size and close browser tabs you don't need.
 
+## Running it on another machine
+
+Clone the repository, double-click `launchers\setup.bat`, and the machine is ready - the same
+launchers work there. `setup.bat` installs uv, espeak-ng, ffmpeg, cloudflared and the GitHub CLI
+if missing, the Python packages, and downloads all models (~2 GB) by scoring a test sentence.
+The first `share.bat` signs in to GitHub in the browser (once per machine) so it can publish the
+session address. Only one machine should share at a time - the fixed address points at whichever
+published last. If GAPhonetics is not cloned next to the coach, the sound guidance is read from
+its published site.
+
 ## Sharing the coach from this machine
 
 `launchers\share.bat` runs the coach here and makes it reachable from anywhere:
