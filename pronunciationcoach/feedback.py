@@ -109,7 +109,7 @@ def word_feedback(w: WordScore) -> WordFeedback:
     return WordFeedback(w.word, band(w), tips)
 
 
-def summary(words: list[WordScore], max_items: int = 3) -> str:
+def summary(words: list[WordScore], max_items: int = 3, practise=None) -> str:
     """One paragraph a learner can act on: how many words a listener caught, how many
     were clear, and the sounds worth practising - split into those that cost
     intelligibility and those that are just accent colouring."""
@@ -130,24 +130,28 @@ def summary(words: list[WordScore], max_items: int = 3) -> str:
     # under "Work on"; the rest are accent notes.
     by_sound: dict[str, Counter[str]] = {}
     weight: dict[str, float] = {}
+    drills: dict[str, str] = {}  # a minimal pair to practise, when the caller can supply one
     for w in words:
         for p in w.phones:
             if p.category == "off":
                 key = describe(p.expected)
                 by_sound.setdefault(key, Counter())["(not heard)" if p.dropped else describe(p.heard)] += 1
                 weight[key] = max(weight.get(key, 0.0), PRIORITY.get(p.expected, 1.0))
+                if practise and not p.dropped and key not in drills:
+                    drills[key] = practise(p.expected, p.heard) or ""
     if not by_sound:
         return head
 
     def line(sound, heards):
         total = sum(heards.values())
         times = f" ({total} times)" if total > 1 else ""
+        drill = f" - practise: {drills[sound]}" if drills.get(sound) else ""
         missing = heards.pop("(not heard)", 0)
         parts = [h for h, _ in heards.most_common(2)]
         if parts and missing:
-            return f"• {sound} came out as {' or '.join(parts)}, or was missing{times}"
+            return f"• {sound} came out as {' or '.join(parts)}, or was missing{times}{drill}"
         if parts:
-            return f"• {sound} came out as {' or '.join(parts)}{times}"
+            return f"• {sound} came out as {' or '.join(parts)}{times}{drill}"
         return f"• {sound} was missing{times}"
 
     ranked = sorted(by_sound.items(), key=lambda kv: -sum(kv[1].values()) * weight[kv[0]])

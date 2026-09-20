@@ -50,6 +50,14 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   **work on this** (missed, or a top-priority contrast such as *th* or *v*) - from the listener's
   confidence and the worst deviation weighted by how much that sound matters (`PRIORITY` in
   `scoring.py`). The score ring counts words understood.
+* **How to make the sound** – from the sibling project [GAPhonetics](https://audiophrases.github.io/GAPhonetics/)
+  (24 GA vowels + 24 consonants, each with tongue/lips/jaw instructions, the sensation to feel, the
+  mistake to avoid, an example word and human recordings). For every sound that needs work the word
+  panel shows the instructions, plays the isolated sound and the example word, suggests a minimal
+  pair, and links to GAPhonetics opened on that exact contrast (`#vowels?a=æ&b=ɑ`,
+  `#consonants?a=ð&b=d`). `phonetics.py` reads the local checkout (`PC_GAPHONETICS_DIR`, or the
+  sibling folder) and falls back to the published site (`PC_GAPHONETICS_URL`). Recordings are
+  CC BY-SA 3.0 / CC0 / public domain; credits live in GAPhonetics' `*-audio-sources.json`.
 * **Known-sentence mode** – you type the sentence; the listener still runs, as the intelligibility judge.
 * **Free-speech mode** – leave the text empty; Whisper's transcript is the reference and the
   phoneme track shows what was actually *said*.

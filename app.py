@@ -23,6 +23,7 @@ from pronunciationcoach.audio import to_mono_16k
 from pronunciationcoach.engine import DEFAULT_MODEL
 from pronunciationcoach.feedback import BAND_COLOR, phone_tip, summary, word_feedback
 from pronunciationcoach.g2p import ACCENTS, DEFAULT_ACCENT
+from pronunciationcoach.phonetics import get_phonetics
 from pronunciationcoach.logs import DEBUG, LOG_FILE, SAVE_RECORDINGS, log_assessment, setup_logging
 from pronunciationcoach.pipeline import assess
 from pronunciationcoach.scoring import GOP_GOOD, GOP_UNSURE
@@ -30,6 +31,7 @@ from pronunciationcoach.tts import synthesize
 from pronunciationcoach.viz import posterior_heatmap, timeline_figure
 
 log = setup_logging()
+PHONETICS = get_phonetics()  # GAPhonetics: how to make each sound (None when unavailable)
 IPA_COLORS = {"good": "#2e8b57", "unsure": "#e0a800", "off": "#c0392b"}
 L1_OPTIONS = ["Catalan", "Spanish", "Other / unknown"]  # plumbed through for the next stage; unused today
 DEFAULT_L1 = os.environ.get("PC_L1", "Catalan")
@@ -76,6 +78,42 @@ def model_audio(text: str, lang: str, speed: str) -> str | None:
     except Exception:
         log.exception("could not synthesise %r", text)
         return None
+
+
+def practise_pair(expected: str, heard: str) -> str:
+    if PHONETICS is None:
+        return ""
+    g = PHONETICS.guidance(expected, heard)
+    return g.practise if g else ""
+
+
+def sound_guides(word) -> list[dict]:
+    """For each sound of the word that needs work: label, instructions, clips, chart link."""
+    guides, seen = [], set()
+    for p in word.phones:
+        if p.category == "good" or p.expected in seen or PHONETICS is None:
+            continue
+        g = PHONETICS.guidance(p.expected, None if p.dropped else p.heard)
+        if g is None:
+            continue
+        seen.add(p.expected)
+        t = g.target
+        lines = [f"**/{t.ipa}/ as in *{t.example}***"]
+        if g.contrast:
+            lines.append(g.contrast)
+        lines += [f"- {h}" for h in t.how]
+        if t.mistake:
+            lines.append(f"- *{t.mistake}*")
+        if g.practise:
+            lines.append(f"Practise the pair: **{g.practise}**")
+        lines.append(f"<a href='{g.link}' target='_blank'>Open this contrast in the vowel & consonant charts ↗</a>")
+        guides.append({
+            "label": f"/{t.ipa}/ ({t.example})" + (" - not heard" if p.dropped else f", you said {p.heard}"),
+            "md": "\n\n".join(lines),
+            "sound": PHONETICS.audio_path(t.phoneme_audio),
+            "word": PHONETICS.audio_path(t.word_audio),
+        })
+    return guides
 
 
 def clip(audio: np.ndarray, start: float, end: float, pad: float = 0.0) -> tuple[int, np.ndarray]:
@@ -145,7 +183,7 @@ def run(audio, text, accent_name, l1):
         words_hl.append((" ", None))
         word_index.append(None)
 
-    summary_text = summary(result.words)
+    summary_text = summary(result.words, practise=practise_pair)
     card = score_card_html(result.words, summary_text)
     note = ""
     if result.transcribed:
@@ -166,6 +204,7 @@ def run(audio, text, accent_name, l1):
                 "span": (sp.start, sp.end),
                 "listener": w.listener_p,
                 "tips": f.tips,
+                "guides": sound_guides(w),
                 "expected": [p.expected for p in w.phones],
                 "heard": [p.heard_label for p in w.phones],
             }
@@ -202,6 +241,7 @@ def run(audio, text, accent_name, l1):
         + (f"Heard but not in the sentence: {result.extra_text()}\n" if result.extra_text() else "")
         + (f"No model label for: {' '.join(result.unknown_phones)}\n" if result.unknown_phones else "")
         + f"Word crops: {result.span_source} · native reference: {', '.join(result.reference_voices) or 'none'}\n"
+        + ("Sound guidance and clips: GAPhonetics (human US recordings; Wiktionary/Wikimedia Commons contributors, CC BY-SA 3.0 / CC0 - credits in its *-audio-sources.json)\n" if PHONETICS else "")
         + f"{result.duration_s:.1f} s of audio · {timing}"
     )
 
@@ -267,7 +307,7 @@ def _index(evt: gr.SelectData) -> int | None:
 def pick_word(evt: gr.SelectData, state):
     """Tap a word: open its panel and immediately play how it was said."""
     idx = _index(evt)
-    nothing = (gr.update(), gr.update(), gr.update(), gr.update(), state)
+    nothing = (gr.update(), gr.update(), gr.update(), gr.update(), state, gr.update(), gr.update(), gr.update())
     if not state or idx is None or idx >= len(state["word_index"]) or state["word_index"][idx] is None:
         return nothing
     i = state["word_index"][idx]
@@ -276,7 +316,40 @@ def pick_word(evt: gr.SelectData, state):
     title = f"### {w['word']} — {w['band']}" + (f"  <span class='hint'>listener confidence {w['listener']:.0%}</span>" if w.get("listener") is not None else "")
     body = "\n".join(f"- {t}" for t in w["tips"]) if w["tips"] else "This word sounded clear."
     body += f"\n\n<span class='hint'>expected /{' '.join(w['expected'])}/ · heard /{' '.join(w['heard'])}/</span>"
-    return gr.update(visible=True), title, body, clip(state["audio"], *w["span"]), state
+    guides = w.get("guides") or []
+    labels = [g["label"] for g in guides]
+    return (
+        gr.update(visible=True),
+        title,
+        body,
+        clip(state["audio"], *w["span"]),
+        state,
+        gr.update(visible=bool(guides)),
+        gr.update(choices=labels, value=labels[0] if labels else None),
+        guides[0]["md"] if guides else "",
+    )
+
+
+def _guide(state, label):
+    w = _current(state)
+    if not w or not label:
+        return None
+    return next((g for g in w.get("guides", []) if g["label"] == label), None)
+
+
+def pick_sound(label, state):
+    g = _guide(state, label)
+    return g["md"] if g else ""
+
+
+def play_guide_sound(label, state):
+    g = _guide(state, label)
+    return g["sound"] if g else None
+
+
+def play_guide_word(label, state):
+    g = _guide(state, label)
+    return g["word"] if g else None
 
 
 with gr.Blocks(title="Pronunciation Coach") as demo:
@@ -315,6 +388,13 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
             btn_word_you = gr.Button("▶ You said this word")
             btn_word_model = gr.Button("▶ Model says it slowly")
         word_tips = gr.Markdown()
+        with gr.Group(visible=False) as guide_panel:
+            gr.Markdown("#### How to make it")
+            sound_pick = gr.Radio(choices=[], label="Sound to work on")
+            with gr.Row():
+                btn_guide_sound = gr.Button("▶ Hear the sound")
+                btn_guide_word = gr.Button("▶ Hear it in a word")
+            guide_md = gr.Markdown()
 
     with gr.Accordion("Technical details (for teachers)", open=False):
         timeline = gr.Plot(label="Timeline: waveform, energy, spikes, word and sound crops")
@@ -337,7 +417,10 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
         [audio, text, accent, l1],
         [card, note, words_hl, state, player, word_panel, tech_text, timeline, ipa_hl, table, plot],
     )
-    words_hl.select(pick_word, [state], [word_panel, word_title, word_tips, player, state])
+    words_hl.select(pick_word, [state], [word_panel, word_title, word_tips, player, state, guide_panel, sound_pick, guide_md])
+    sound_pick.change(pick_sound, [sound_pick, state], [guide_md])
+    btn_guide_sound.click(play_guide_sound, [sound_pick, state], [player])
+    btn_guide_word.click(play_guide_word, [sound_pick, state], [player])
     btn_you.click(play_you, [state], [player])
     btn_model.click(play_model, [state], [player])
     btn_slow.click(play_slow, [state], [player])
