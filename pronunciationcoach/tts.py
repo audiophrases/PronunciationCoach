@@ -35,8 +35,20 @@ REFERENCE_VOICES = {
     "en-gb": ["en-GB-SoniaNeural", "en-GB-RyanNeural"],
 }
 
-# Edge TTS rate strings. "Slow" is what a teacher does when modelling a word.
+# Edge TTS rate strings for the named speeds. A number works too (1.0 = natural pace,
+# 0.95 = 5 % slower), which is what the UI's speed slider sends.
 SPEEDS = {"normal": "+0%", "slow": "-35%"}
+SPEED_FACTORS = {"normal": 1.0, "slow": 0.65}
+
+
+def rate_string(speed: str | float) -> str:
+    if isinstance(speed, str):
+        return SPEEDS.get(speed, SPEEDS["normal"])
+    return f"{round((float(speed) - 1) * 100):+d}%"
+
+
+def speed_factor(speed: str | float) -> float:
+    return SPEED_FACTORS.get(speed, 1.0) if isinstance(speed, str) else float(speed)
 
 _ESPEAK_EXE = "espeak-ng" if sys.platform != "win32" else r"C:\Program Files\eSpeak NG\espeak-ng.exe"
 
@@ -70,7 +82,7 @@ async def _stream(text: str, voice: str, rate: str, mp3: Path) -> list[WordBound
 
 
 def synthesize(
-    text: str, lang: str = "en-us", speed: str = "normal", voice: str | None = None, with_words: bool = False
+    text: str, lang: str = "en-us", speed: str | float = "normal", voice: str | None = None, with_words: bool = False
 ) -> Path:
     """Return an audio file (mp3, or wav from the fallback) saying `text`.
 
@@ -81,7 +93,7 @@ def synthesize(
     if not text:
         raise ValueError("nothing to say")
     voice = voice or VOICES.get(lang, VOICES["en-us"])
-    rate = SPEEDS.get(speed, SPEEDS["normal"])
+    rate = rate_string(speed)
     CACHE_DIR.mkdir(exist_ok=True)
     key = _key(voice, rate, text)
     mp3 = CACHE_DIR / f"{key}.mp3"
@@ -100,7 +112,7 @@ def synthesize(
     except Exception as exc:  # offline, endpoint changed, ...
         log.warning("edge-tts failed (%s); falling back to espeak-ng for %r", exc, text)
 
-    speed_wpm = "150" if speed == "normal" else "100"
+    speed_wpm = str(round(150 * speed_factor(speed)))
     subprocess.run([_ESPEAK_EXE, "-v", lang, "-s", speed_wpm, "-w", str(wav), text], check=True, capture_output=True)
     return wav
 

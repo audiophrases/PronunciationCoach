@@ -1,8 +1,8 @@
 """Gradio front end.
 
 Learner view: a score ring, the sentence as tappable word chips, one player that
-speaks whatever was tapped (you, the model, one word), and a word panel with
-one line of advice per sound that needs work.
+speaks whatever was tapped (you, the model, one word) at the pace set by one speed
+slider, and a word panel with one line of advice per sound that needs work.
 Teacher view: everything technical (timeline, IPA, per-phone table, posterior
 heatmap) in a collapsed section underneath.
 """
@@ -72,7 +72,7 @@ def english_ui() -> gr.I18n:
     return gr.I18n(**translations)
 
 
-def model_audio(text: str, lang: str, speed: str) -> str | None:
+def model_audio(text: str, lang: str, speed: float) -> str | None:
     try:
         return str(synthesize(text, lang, speed))
     except Exception:
@@ -141,22 +141,43 @@ def clip(audio: np.ndarray, start: float, end: float, sr: int = SAMPLE_RATE) -> 
     return sr, out
 
 
-def slowed(sr: int, samples: np.ndarray, tempo: float = 0.7) -> str | None:
-    """The same clip at 70 % speed, pitch preserved (ffmpeg's atempo), for hearing your own word."""
+# Playback speed: one slider for everything that can be played, so you and the model are
+# always compared at the same pace. 1 = as spoken; ffmpeg's atempo takes 0.5-100 in one pass.
+SPEED_MIN, SPEED_MAX, SPEED_STEP, SPEED_DEFAULT = 0.5, 1.5, 0.05, 1.0
+
+
+def _speed(value) -> float:
+    try:
+        return round(min(max(float(value), SPEED_MIN), SPEED_MAX), 2)
+    except (TypeError, ValueError):
+        return SPEED_DEFAULT
+
+
+def retimed(sr: int, samples: np.ndarray, speed: float):
+    """The same audio at another pace with the pitch preserved (ffmpeg's atempo).
+    Files are named by content and speed, so replaying is free and two listeners never
+    share a file; at speed 1 the samples are returned as they are."""
+    if abs(speed - 1.0) < 1e-6:
+        return sr, samples
+    import hashlib
     import subprocess
     import tempfile
 
     import soundfile as sf
 
-    src = Path(tempfile.gettempdir()) / f"coach_clip_{os.getpid()}.wav"
-    dst = src.with_name(f"coach_clip_{os.getpid()}_slow.wav")
-    sf.write(src, samples, sr)
+    digest = hashlib.sha1(np.ascontiguousarray(samples, dtype=np.float32).tobytes()).hexdigest()[:16]
+    dst = Path(tempfile.gettempdir()) / f"coach_clip_{digest}_{speed:.2f}.wav"
+    if dst.exists():
+        return str(dst)
+    src = dst.with_name(f"coach_clip_{digest}.wav")
+    if not src.exists():
+        sf.write(src, samples, sr)
     try:
-        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-filter:a", f"atempo={tempo}", str(dst)], check=True, capture_output=True)
+        subprocess.run(["ffmpeg", "-y", "-v", "error", "-i", str(src), "-filter:a", f"atempo={speed}", str(dst)], check=True, capture_output=True)
         return str(dst)
     except Exception as exc:
-        log.warning("could not slow the clip (%s)", exc)
-        return None
+        log.warning("could not change the clip's speed (%s); playing it as recorded", exc)
+        return sr, samples
 
 
 def score_card_html(words, summary_text: str) -> str:
@@ -306,20 +327,17 @@ def run(audio, text, accent_name, l1):
 # --- playback --------------------------------------------------------------------
 
 
-def play_you(state):
+def play_you(state, speed):
     if not state:
         return None
-    return SAMPLE_RATE, state["audio"]
+    sr, orig = state.get("orig", (SAMPLE_RATE, state["audio"]))
+    return retimed(sr, orig, _speed(speed))
 
 
-def play_model(state, speed="normal"):
+def play_model(state, speed):
     if not state:
         return None
-    return model_audio(state["text"], state["lang"], speed)
-
-
-def play_slow(state):
-    return play_model(state, "slow")
+    return model_audio(state["text"], state["lang"], _speed(speed))
 
 
 def _current(state):
@@ -328,27 +346,19 @@ def _current(state):
     return None
 
 
-def _word_clip(state, w):
+def _word_clip(state, w, speed):
     sr, orig = state.get("orig", (SAMPLE_RATE, state["audio"]))
-    return clip(orig, *w["span"], sr=sr)
+    return retimed(*clip(orig, *w["span"], sr=sr), _speed(speed))
 
 
-def play_word_you(state):
+def play_word_you(state, speed):
     w = _current(state)
-    return _word_clip(state, w) if w else None
+    return _word_clip(state, w, speed) if w else None
 
 
-def play_word_you_slow(state):
+def play_word_model(state, speed):
     w = _current(state)
-    if not w:
-        return None
-    sr, samples = _word_clip(state, w)
-    return slowed(sr, samples)
-
-
-def play_word_model(state):
-    w = _current(state)
-    return model_audio(w["word"], state["lang"], "slow") if w else None
+    return model_audio(w["word"], state["lang"], _speed(speed)) if w else None
 
 
 # --- taps ------------------------------------------------------------------------
@@ -360,7 +370,7 @@ def _index(evt: gr.SelectData) -> int | None:
     return evt.index if isinstance(evt.index, int) else evt.index[0]
 
 
-def pick_word(evt: gr.SelectData, state):
+def pick_word(evt: gr.SelectData, state, speed):
     """Tap a word: open its panel and immediately play how it was said."""
     idx = _index(evt)
     nothing = (gr.update(), gr.update(), gr.update(), gr.update(), state, gr.update(), gr.update(), gr.update())
@@ -378,7 +388,7 @@ def pick_word(evt: gr.SelectData, state):
         gr.update(visible=True),
         title,
         body,
-        _word_clip(state, w),
+        _word_clip(state, w, speed),
         state,
         gr.update(visible=bool(guides)),
         gr.update(choices=labels, value=labels[0] if labels else None),
@@ -432,18 +442,21 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
                 show_inline_category=False,
                 elem_id="sentence",
             )
+            speed = gr.Slider(
+                SPEED_MIN, SPEED_MAX, value=SPEED_DEFAULT, step=SPEED_STEP,
+                label="Playback speed (you and the model)",
+                info="1 = as spoken. Around 0.7 is good for hearing the sounds in a word.",
+            )
             with gr.Row():
                 btn_you = gr.Button("▶ You")
                 btn_model = gr.Button("▶ Model")
-                btn_slow = gr.Button("▶ Model, slowly")
             player = gr.Audio(label="Now playing", autoplay=True, interactive=False, elem_id="player")
 
     with gr.Group(visible=False) as word_panel:
         word_title = gr.Markdown()
         with gr.Row():
             btn_word_you = gr.Button("▶ You said this word")
-            btn_word_you_slow = gr.Button("▶ You, slowed down")
-            btn_word_model = gr.Button("▶ Model says it slowly")
+            btn_word_model = gr.Button("▶ Model says this word")
         word_tips = gr.Markdown()
         with gr.Group(visible=False) as guide_panel:
             gr.Markdown("#### How to make it")
@@ -474,16 +487,14 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
         [audio, text, accent, l1],
         [card, note, words_hl, state, player, word_panel, tech_text, timeline, ipa_hl, table, plot],
     )
-    words_hl.select(pick_word, [state], [word_panel, word_title, word_tips, player, state, guide_panel, sound_pick, guide_md])
+    words_hl.select(pick_word, [state, speed], [word_panel, word_title, word_tips, player, state, guide_panel, sound_pick, guide_md])
     sound_pick.change(pick_sound, [sound_pick, state], [guide_md])
     btn_guide_sound.click(play_guide_sound, [sound_pick, state], [player])
     btn_guide_word.click(play_guide_word, [sound_pick, state], [player])
-    btn_you.click(play_you, [state], [player])
-    btn_model.click(play_model, [state], [player])
-    btn_slow.click(play_slow, [state], [player])
-    btn_word_you.click(play_word_you, [state], [player])
-    btn_word_you_slow.click(play_word_you_slow, [state], [player])
-    btn_word_model.click(play_word_model, [state], [player])
+    btn_you.click(play_you, [state, speed], [player])
+    btn_model.click(play_model, [state, speed], [player])
+    btn_word_you.click(play_word_you, [state, speed], [player])
+    btn_word_model.click(play_word_model, [state, speed], [player])
 
 if __name__ == "__main__":
     log.info(

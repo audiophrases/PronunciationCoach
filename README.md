@@ -27,8 +27,11 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
 ```
 
 * **Learner view** – a score ring, the sentence as tappable word chips (clear / almost /
-  work on this), one player that speaks whatever you tap: the whole sentence (you, the model,
-  the model slowly) or one word, with a line of plain-language advice per sound that needs work.
+  work on this), one player that speaks whatever you tap: the whole sentence (you or the model)
+  or one word, with a line of plain-language advice per sound that needs work. One speed slider
+  (0.5-1.5 in steps of 0.05) applies to everything played, so you and the model are always compared
+  at the same pace: the model voice is synthesised at that rate, your own audio is time-stretched
+  with the pitch kept (ffmpeg atempo).
   The model voice is Microsoft Edge's neural TTS via `edge-tts` (cached in `tts_cache/`; falls
   back to espeak-ng offline). Everything technical sits in a collapsed
   "Technical details (for teachers)" section: timeline, IPA, per-phone table, posterior heatmap.
@@ -44,7 +47,7 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   Charsiu crops are within ~17 / ~23 ms; `scripts/calibrate_spikes.py` reproduces that.
   If Charsiu is unavailable the spike-based estimate in `boundaries.py` is used instead.
   Playback clips take the recording at its original rate, add 60/40 ms of context, 10 ms fades and
-  a level boost; "You, slowed down" plays the same clip at 70 % speed (ffmpeg atempo).
+  a level boost, then follow the speed slider.
 * **Speech, not dictionary words** – three things stop natural, connected speech from being
   penalised. (1) *Native reference by example*: the sentence is synthesised with two natural
   voices and run through our own recogniser, and whatever it hears a native do in that position
