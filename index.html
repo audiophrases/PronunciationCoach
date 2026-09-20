@@ -38,12 +38,33 @@
     const practise = '<a class="btn secondary" href="https://audiophrases.github.io/GAPhonetics/">Practise sounds meanwhile</a>';
     const hours = (iso) => (Date.now() - Date.parse(iso)) / 36e5;
 
+    // GitHub Pages caches files for 10 minutes, so ask fresher sources first: the GitHub API
+    // (about a minute), then the raw file (about five), and only then the copy next to this page.
+    const [owner, repo] = ['audiophrases', 'PronunciationCoach'];
+    const sources = [
+      async () => {
+        const res = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents/coach.json?ref=gh-pages`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(res.status);
+        const data = await res.json();
+        return JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(data.content.replace(/\n/g, '')), c => c.charCodeAt(0))));
+      },
+      async () => {
+        const res = await fetch(`https://raw.githubusercontent.com/${owner}/${repo}/gh-pages/coach.json`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(res.status);
+        return res.json();
+      },
+      async () => {
+        const res = await fetch(`./coach.json?t=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(res.status);
+        return res.json();
+      },
+    ];
+
     async function main() {
       let info = null;
-      try {
-        const res = await fetch(`./coach.json?t=${Date.now()}`, { cache: 'no-store' });
-        if (res.ok) info = await res.json();
-      } catch (e) { /* offline or not published yet */ }
+      for (const source of sources) {
+        try { info = await source(); break; } catch (e) { /* try the next one */ }
+      }
 
       if (info && info.open && info.url && hours(info.opened_at) < 12) {
         status.innerHTML = '<span class="status open">open</span>';
