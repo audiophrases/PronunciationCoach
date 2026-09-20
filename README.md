@@ -75,6 +75,8 @@ Everything in `launchers\` is a plain `.bat` file:
 | `score_recording.bat` | Drag a recording onto it, type the sentence (or press Enter for free speech), get the phone table and heatmap |
 | `run_app_debug.bat` | Same as `run_app.bat`, plus the full per-phone table in the log and every recording archived in `recordings\` (wav + json) |
 | `open_logs.bat` | Opens `logs\app.log` in Notepad and the `recordings\` folder |
+| `share.bat` | Starts the coach and shares it with students: a Cloudflare tunnel exposes it, and the fixed address `https://audiophrases.github.io/PronunciationCoach/` forwards to this session. Keep the window open |
+| `stop_sharing.bat` | Ends the sharing session cleanly and marks the fixed address "closed" |
 
 The app always writes one line per assessment to `logs\app.log` (mode, text, what was heard, flagged
 phones, timings) plus any errors. Archived recordings can be replayed by dragging the `.wav` onto
@@ -105,6 +107,25 @@ Memory: the phoneme model (~1.4 GB), the cropping model (~0.4 GB) and Whisper `b
 the listener) together need about 3.5 GB free; if Whisper cannot load, verdicts fall back to
 severity only.
 On an 8 GB machine, let Windows manage the page file size and close browser tabs you don't need.
+
+## Sharing the coach from this machine
+
+`launchers\share.bat` runs the coach here and makes it reachable from anywhere:
+
+1. the app starts on this machine;
+2. `cloudflared` (installed on first use) opens an outbound tunnel and gets a temporary
+   `https://<random>.trycloudflare.com` address - no account, no router settings, HTTPS included,
+   which browsers require before allowing the microphone;
+3. `scripts/share.py` writes that address into `coach.json` on the `gh-pages` branch (through the
+   logged-in `gh`), next to the front door page `share/index.html`;
+4. students open the **fixed** address `https://audiophrases.github.io/PronunciationCoach/`, which reads
+   the current address and forwards them; when nothing is running it says so and offers GAPhonetics
+   to practise with meanwhile. `stop_sharing.bat` (or Ctrl+C) marks it closed.
+
+The front door reads the file from the GitHub API first (fresh within a minute) because GitHub Pages
+itself caches files for ten minutes. Sessions run in normal mode (recordings are scored and discarded,
+not archived). One recording is scored at a time, ~10-20 s each on this laptop: fine for homework or a
+small group, not for a whole class pressing the button at once. The laptop must stay awake and online.
 
 ## Deploying
 

@@ -1,0 +1,32 @@
+@echo off
+setlocal
+call "%~dp0_env.bat"
+title Pronunciation Coach - shared with students
+
+where uv >nul 2>&1 || (
+    echo uv is not installed. Run setup.bat first.
+    pause
+    exit /b 1
+)
+where cloudflared >nul 2>&1 || if not exist "%ProgramFiles(x86)%\cloudflared\cloudflared.exe" (
+    echo Installing cloudflared ^(approve the Windows prompt if one appears^) ...
+    winget install --id Cloudflare.cloudflared --exact --accept-package-agreements --accept-source-agreements || (
+        echo Could not install cloudflared.
+        pause
+        exit /b 1
+    )
+    set "PATH=%ProgramFiles(x86)%\cloudflared;%PATH%"
+)
+
+rem Students' recordings are scored here and not kept: normal mode, no archive.
+set "PC_DEBUG=0"
+set "PC_SAVE_RECORDINGS=0"
+call "%~dp0_free_port.bat"
+
+echo Starting the coach and sharing it. Students open the fixed address shown below.
+echo Keep this window open during the session. Press Ctrl+C to stop sharing.
+echo.
+uv run python scripts\share.py
+echo.
+echo Sharing has stopped.
+pause
