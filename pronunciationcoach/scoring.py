@@ -133,15 +133,31 @@ class WordScore:
         sev = self.severity
         p = 0.7 if self.listener_p is None else self.listener_p  # no listener: neither confident nor lost
         understood = True if self.understood is None else self.understood
+        if sev == 0.0:
+            # Every sound was right. The listener alone cannot make that "work on this":
+            # Whisper's confidence in a word also collapses over homophones (see / sea),
+            # small function words and repeats, none of which is pronunciation. A word it
+            # did not produce at all is worth a look, no more.
+            return "clear" if understood else "almost"
         if not understood or p < 0.3:
             return "work on this"
-        if sev == 0.0:
-            return "clear"
         if sev >= 3.0 or (sev >= 2.0 and p < 0.8):
             return "work on this"
         if sev >= 1.5 or p < 0.6 or (sev >= 1.0 and p < 0.8):
             return "almost"
         return "accent"
+
+    @property
+    def listener_doubt(self) -> str | None:
+        """When every sound was right but the listener still wavered: "missed" (it produced
+        another word) or "hesitated" (it produced this one, with little confidence)."""
+        if self.severity != 0.0 or self.listener_p is None:
+            return None
+        if self.understood is False:
+            return "missed"
+        if self.listener_p < 0.3:
+            return "hesitated"
+        return None
 
     @property
     def category(self) -> str:

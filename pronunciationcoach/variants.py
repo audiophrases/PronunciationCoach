@@ -72,6 +72,7 @@ LEXICAL: dict[str, list[list[str]]] = {
     "were": [["w", "ɚ"]],
     "from": [["f", "ɹ", "ə", "m"]],
     "than": [["ð", "ə", "n"]],
+    "with": [["w", "ɪ", "θ"], ["w", "ə", "θ"], ["w", "ə", "ð"]],  # GA has both th's; espeak only gives the voiced one
     "there": [["ð", "ɚ"]],
     "some": [["s", "ə", "m"]],
     "just": [["dʒ", "ə", "s", "t"], ["dʒ", "ə", "s"]],

@@ -61,3 +61,13 @@ def test_summary_ranks_th_above_many_unreduced_vowels_and_merges_weak_vowels():
     assert practise[0].startswith("• 'th' as in *this*"), practise
     assert sum("weak 'uh'" in ln for ln in practise) == 1, practise
     assert "(3 times)" in [ln for ln in practise if "weak 'uh'" in ln][0]
+
+
+def test_word_feedback_explains_a_listener_hesitation_over_a_clean_word():
+    see = WordScore("see", [ps("s", "s", 0.0), ps("iː", "iː", 0.0)], listener_p=0.16, understood=True)
+    fb = word_feedback(see)
+    assert fb.band == "clear" and len(fb.tips) == 1
+    assert "hesitated" in fb.tips[0] and "16%" in fb.tips[0] and "Nothing to fix" in fb.tips[0]
+    see.listener_p, see.understood = 0.0, False
+    fb = word_feedback(see)
+    assert fb.band == "almost" and "another word" in fb.tips[0]

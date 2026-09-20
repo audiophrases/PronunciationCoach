@@ -103,9 +103,27 @@ def natural_note(p: PhoneScore, word: str) -> str:
     return f"Your {describe(p.expected)} in *{word}* came out as {describe(p.heard)} - {who}. Fine."
 
 
+def listener_note(w: WordScore) -> str | None:
+    """Explain the listener's view of a word whose sounds were all right, so a low
+    confidence figure next to a clean word does not read as a hidden fault."""
+    doubt = w.listener_doubt
+    if doubt == "missed":
+        return (f"Every sound in *{w.word}* was right, but the listener took it for another word. "
+                "That is usually the context rather than your pronunciation - check the word's stress "
+                "and how it links to its neighbours.")
+    if doubt == "hesitated":
+        return (f"Every sound in *{w.word}* was right; the listener only hesitated over the word "
+                f"({w.listener_p:.0%}), as it does with words that sound like others (see / sea), small "
+                "function words and repeats. Nothing to fix.")
+    return None
+
+
 def word_feedback(w: WordScore) -> WordFeedback:
     tips = [phone_tip(p, w.word) for p in w.phones if p.category != "good"]
     tips += [natural_note(p, w.word) for p in w.phones if p.natural]
+    note = listener_note(w)
+    if note:
+        tips.append(note)
     return WordFeedback(w.word, band(w), tips)
 
 

@@ -37,10 +37,22 @@ def test_verdicts_separate_accent_from_problems():
     assert that.verdict == "work on this"
     that.listener_p = 0.9
     assert that.verdict == "almost"
-    # listener missed the word entirely
-    missed = WordScore("things", [ps("θ", "θ", 0.0)], listener_p=0.0, understood=False)
+    # listener missed a word that also had a deviation
+    missed = WordScore("things", [ps("θ", "θ", 0.0), ps("ɪ", "iː", -3.0)], listener_p=0.0, understood=False)
     assert missed.verdict == "work on this"
     # nothing flagged
     assert WordScore("hi", [ps("h", "h", 0.0)], listener_p=0.9, understood=True).verdict == "clear"
+
+
+def test_listener_alone_cannot_fail_a_word_whose_sounds_were_all_right():
+    # "see" said perfectly; Whisper split its confidence over see / sea (free-speech test, 16 %)
+    see = WordScore("see", [ps("s", "s", 0.0), ps("iː", "iː", 0.0)], listener_p=0.16, understood=True)
+    assert see.verdict == "clear" and see.listener_doubt == "hesitated"
+    # every sound right but the listener wrote another word (known-sentence mode): worth a look
+    see.listener_p, see.understood = 0.0, False
+    assert see.verdict == "almost" and see.listener_doubt == "missed"
+    # the same low confidence with a real deviation still counts against the word
+    sea = WordScore("see", [ps("s", "s", 0.0), ps("iː", "ɪ", -3.0)], listener_p=0.16, understood=True)
+    assert sea.verdict == "work on this" and sea.listener_doubt is None
     # no listener at all: falls back to severity only
     assert WordScore("so", [ps("oʊ", "oː", -2.7)]).verdict == "almost"
