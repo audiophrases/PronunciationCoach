@@ -18,6 +18,7 @@
     .btn.secondary { background: transparent; color: var(--accent); border: 2px solid var(--accent); }
     .status { display: inline-block; padding: .2rem .6rem; border-radius: 999px; font-size: .85rem; font-weight: 600; }
     .open { background: #e3f4ea; color: var(--ok); } .closed { background: #fde8e6; color: #b3261e; } .unknown { background: #eef0f4; color: var(--muted); }
+    .lost { background: #fff3d6; color: #8a5a00; }
   </style>
 </head>
 <body>
@@ -30,13 +31,29 @@
     </div>
   </main>
   <script>
-    // share.bat publishes coach.json next to this page: { "url": "...", "open": true, "opened_at": "ISO time" }.
+    // share.bat publishes coach.json next to this page:
+    //   { "url": "...", "open": true, "opened_at": "ISO time", "seen": "ISO time" }
     // The address of the coach changes every time the teacher starts it; this page never does.
+    // "seen" is re-stamped every few minutes while sharing runs, so a machine that went to
+    // sleep or lost its connection (without ever publishing "closed") shows as lost, not open.
     const status = document.getElementById('status');
     const message = document.getElementById('message');
     const actions = document.getElementById('actions');
     const practise = '<a class="btn secondary" href="https://audiophrases.github.io/GAPhonetics/">Practise sounds meanwhile</a>';
     const hours = (iso) => (Date.now() - Date.parse(iso)) / 36e5;
+    const minutes = (iso) => (Date.now() - Date.parse(iso)) / 6e4;
+    const clock = (iso) => new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const LOST_AFTER_MIN = 15;
+
+    // Can the coach's address be reached at all? A quick tunnel that Cloudflare has dropped no
+    // longer resolves, and the browser would land on an error page instead of the coach.
+    async function reachable(url) {
+      const ctl = new AbortController();
+      const timer = setTimeout(() => ctl.abort(), 8000);
+      try { await fetch(url, { mode: 'no-cors', cache: 'no-store', signal: ctl.signal }); return true; }
+      catch (e) { return false; }
+      finally { clearTimeout(timer); }
+    }
 
     // GitHub Pages caches files for 10 minutes, so ask fresher sources first: the GitHub API
     // (about a minute), then the raw file (about five), and only then the copy next to this page.
@@ -66,11 +83,22 @@
         try { info = await source(); break; } catch (e) { /* try the next one */ }
       }
 
-      if (info && info.open && info.url && hours(info.opened_at) < 12) {
-        status.innerHTML = '<span class="status open">open</span>';
-        message.textContent = `The coach was started at ${new Date(info.opened_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. Taking you there…`;
-        actions.innerHTML = `<a class="btn" href="${info.url}">Open the coach</a> ${practise}`;
-        setTimeout(() => { window.location.href = info.url; }, 2500);
+      if (info && info.open && info.url) {
+        const stale = info.seen ? minutes(info.seen) > LOST_AFTER_MIN : hours(info.opened_at) >= 12;
+        if (!stale) {
+          status.innerHTML = '<span class="status open">open</span>';
+          message.textContent = `The coach was started at ${clock(info.opened_at)}. Checking the connection…`;
+          actions.innerHTML = `<a class="btn" href="${info.url}">Open the coach</a> ${practise}`;
+          if (await reachable(info.url)) {
+            message.textContent = `The coach was started at ${clock(info.opened_at)}. Taking you there…`;
+            setTimeout(() => { window.location.href = info.url; }, 1500);
+            return;
+          }
+        }
+        status.innerHTML = '<span class="status lost">connection lost</span>';
+        const since = info.seen ? ` It was last heard from at ${clock(info.seen)}.` : '';
+        message.textContent = `The coach's machine cannot be reached right now - it may have gone to sleep or lost its internet connection.${since} Ask your teacher to restart sharing, then reload this page.`;
+        actions.innerHTML = practise;
         return;
       }
       status.innerHTML = '<span class="status closed">closed</span>';
