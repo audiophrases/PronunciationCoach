@@ -29,8 +29,8 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
 * **Learner view** – a score ring, the sentence as tappable word chips (clear / accent / almost /
   work on this), one player that speaks whatever you tap, with a line of plain-language advice per
   sound that needs work. Tapping a word plays what *you* said, with a linked word when useful;
-  tapping within the same playback pair again plays the model; again, you, and so on.
-  The heading shows the pair and emphasizes the selected word; colors and tips stay per word. The whole sentence
+  tapping within the same playback group again plays the model; again, you, and so on.
+  The heading shows the group and emphasizes the selected word; colors and tips stay per word. The whole sentence
   has its own ▶ You / ▶ Model buttons. One speed slider (0.5-1.5 in steps of 0.05) applies to everything
   played, so you and the model are always compared at the same pace: the model voice is synthesised at
   that rate, your own audio is time-stretched with the pitch kept (ffmpeg atempo). The model voice can
@@ -64,15 +64,20 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   The start search cannot reach before the preceding word's first kept spike; adjusting a shared
   boundary cannot reverse that word's crop. A final logged safety check keeps live spans ordered
   and inside the recording, without inventing audio for missing words.
-* **Short playback pairs** – function words (articles, prepositions, pronouns, conjunctions and
+* **Short playback groups** – function words (articles, prepositions, pronouns, conjunctions and
   helping verbs) are candidates for context: **[can you] [hear me]**, **[the store]**, **[to school]**.
-  Chunks contain at most **two words**, never a chain of pairs. Content words generally stay alone.
+  **Pairs are the default, not a strict limit.** Compact question openings can stay together:
+  **[what do you] [want to] [watch]**, or **[how are you]**. These three-word candidates require
+  live words, weak auxiliary/pronoun cues, and no detected emphasis or internal barrier.
+  Lexical connected pairs such as *want to* take priority over a generic attachment of *to*.
+  Chunks are selected as complete groups, never by chaining pairs into a whole sentence.
+  Content words generally stay alone; grouping suggests context, not proof a reduction was heard.
   Neighboring pair choices favor grammatical attachment; main-verb *have/do* are not automatically
   treated as unstressed. Duration and relative loudness provide a conservative emphasis heuristic,
   not a linguistic stress detector. Crops under 120 ms can also receive context. Punctuation,
-  pauses/gaps of at least 100 ms and intervening extra speech block a pair; a pair longer than 1.5 s
+  pauses/gaps of at least 100 ms and intervening extra speech block a group; a group longer than 1.5 s
   is not formed. A barrier or cap may leave a short word alone. Missing words add no parked audio,
-  and an entirely missing chunk offers only model playback. Both voices play the same word/pair
+  and an entirely missing chunk offers only model playback. Both voices play the same word/group
   text, using the existing speed control. The technical table and recording archive include
   membership and reasons. `scripts/crop_check.py --rechunk` audits archived recordings without
   model inference (old archives assume 20 ms scoring frames). Set `PC_CHUNKS=0` to compare with

@@ -444,7 +444,7 @@ def _index(evt: gr.SelectData) -> int | None:
 
 
 def pick_word(evt: gr.SelectData, state, speed, voice):
-    """Select word-specific feedback, alternating learner/model audio within its pair."""
+    """Select word-specific feedback, alternating learner/model audio within its group."""
     idx = _index(evt)
     nothing = (gr.update(), gr.update(), gr.update(), gr.update(), state, gr.update(), gr.update(), gr.update())
     if not state or idx is None or idx < 0 or idx >= len(state["word_index"]) or state["word_index"][idx] is None:
@@ -456,7 +456,7 @@ def pick_word(evt: gr.SelectData, state, speed, voice):
     if same_chunk and state.get("turn") == "you":
         turn = "model"
     else:
-        turn = "you"  # a new playback pair starts with what you said
+        turn = "you"  # a new playback group starts with what you said
     state["current"], state["turn"] = i, turn
     body = "\n".join(f"- {t}" for t in w["tips"]) if w["tips"] else "This word sounded clear."
     body += f"\n\n<span class='hint'>expected /{' '.join(w['expected'])}/ · heard /{' '.join(w['heard'])}/</span>"
@@ -512,7 +512,7 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
             note = gr.Markdown()
         with gr.Column(scale=3):
             words_hl = gr.HighlightedText(
-                label="Tap a word to hear it with a linked word when useful; tap again for the model",
+                label="Tap a word to hear it in context when useful; tap again for the model",
                 color_map=BAND_COLOR,
                 show_legend=True,
                 show_inline_category=False,

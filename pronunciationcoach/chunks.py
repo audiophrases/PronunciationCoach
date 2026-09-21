@@ -1,4 +1,4 @@
-"""Conservative two-word playback groups; pronunciation scores remain per word.
+"""Short playback groups, usually pairs; pronunciation scores remain per word.
 
 Function-word membership suggests a candidate, not a measurement of stress.
 Pauses, punctuation, extra speech and likely emphasis take precedence.
@@ -19,7 +19,7 @@ from .variants import PAIRS
 SHORT_S = 0.12
 STRONG_S = 0.30
 PAUSE_S = 0.10
-MAX_PAIR_S = 1.5
+MAX_CHUNK_S = 1.5
 EPS = 1e-8
 ARTICLES = set("a an the".split())
 PREPOSITIONS = set("to from in on at for of with by as than into onto over under about before after".split())
@@ -31,6 +31,7 @@ AUXILIARIES = set("am is are was were be been being can could will would shall s
 AMBIGUOUS_VERBS = set("do does did have has had".split())
 CONTRACTIONS = set("i'm you're he's she's it's we're they're i've you've we've they've i'll you'll he'll she'll it'll we'll they'll i'd you'd he'd she'd we'd they'd".split())
 FUNCTION_WORDS = ARTICLES | PREPOSITIONS | SUBJECTS | OBJECTS | POSSESSIVES | CONJUNCTIONS | AUXILIARIES | CONTRACTIONS
+QUESTION_WORDS = set("what where when why how who".split())
 PUNCTUATION = re.compile(r"[.,;:!?\u2014\u2013\-\n]")
 
 
@@ -72,11 +73,11 @@ def safe_spans(spans: list[Span], duration: float, dropped: list[bool]) -> list[
 def build_chunks(text: str, words: list[str], spans: list[Span], audio: np.ndarray,
                  dropped: list[bool] | None = None, extras: list[tuple[float, float]] | None = None,
                  enabled: bool = True) -> list[PlaybackChunk]:
-    """Return disjoint singletons/pairs, with a playable union of live members.
+    """Return disjoint short groups, with a playable union of live members.
 
-    Prefer grammatical pairs (can you, hear me, the store). Maximum-weight
-    adjacent matching keeps a word in exactly one pair, without chaining pairs
-    into longer phrases. Ties prefer the earlier pair.
+    Prefer grammatical pairs (can you, hear me, the store), but allow compact
+    question openings (what do you). Choose complete candidates rather than
+    chaining neighboring pairs into an arbitrary phrase. Ties favor earlier groups.
     """
     n = len(words)
     dropped = [False] * n if dropped is None else dropped
@@ -141,7 +142,7 @@ def build_chunks(text: str, words: list[str], spans: list[Span], audio: np.ndarr
     for i in range(n - 1):
         j = i + 1
         members = [spans[k] for k in (i, j) if live[k]]
-        if not enabled or barriers[i] or (members and members[-1].end - members[0].start > MAX_PAIR_S + EPS):
+        if not enabled or barriers[i] or (members and members[-1].end - members[0].start > MAX_CHUNK_S + EPS):
             candidates.append((0, ""))
             continue
         a, b = lower[i], lower[j]
@@ -159,7 +160,7 @@ def build_chunks(text: str, words: list[str], spans: list[Span], audio: np.ndarr
         if weak[i] and a in PREPOSITIONS and not weak[j]:
             choices.append((90, "preposition + word"))
         if (a, b) in PAIRS and (weak[i] or weak[j]):
-            choices.append((85, "connected pair"))
+            choices.append((115, "connected pair"))
         if weak[i] and not weak[j]:
             choices.append((80, "function word + word"))
         if weak[i] and weak[j]:
@@ -172,15 +173,32 @@ def build_chunks(text: str, words: list[str], spans: list[Span], audio: np.ndarr
             choices.append((20, "short crop context"))
         candidates.append(max(choices, key=lambda choice: choice[0]))
 
-    best, pair = [0] * (n + 1), [False] * n
+    # Usually two words are enough. A question word + weak auxiliary + weak
+    # subject is a coherent exception: [what do you] [want to] [watch].
+    # This suggests playback context; it does not assert that a reduction was heard.
+    groups: list[list[tuple[int, int, str]]] = [[] for _ in words]
+    for i, (score, reason) in enumerate(candidates):
+        if score:
+            groups[i].append((2, score, reason))
+    for i in range(n - 2):
+        if (enabled and lower[i] in QUESTION_WORDS and auxiliary(i + 1) and
+                lower[i + 2] in SUBJECTS and weak[i + 1] and weak[i + 2] and
+                all(live[i:i + 3]) and not any(strong[i:i + 3]) and
+                not any(barriers[i:i + 2]) and
+                spans[i + 2].end - spans[i].start <= MAX_CHUNK_S + EPS):
+            groups[i].append((3, 200, "connected question opening"))
+
+    best = [0] * (n + 1)
+    lengths, reasons = [1] * n, ["single word"] * n
     for i in range(n - 1, -1, -1):
         best[i] = best[i + 1]
-        if i + 1 < n and candidates[i][0] and candidates[i][0] + best[i + 2] >= best[i]:
-            best[i] = candidates[i][0] + best[i + 2]
-            pair[i] = True
+        for length, score, reason in groups[i]:
+            if score + best[i + length] >= best[i]:
+                best[i] = score + best[i + length]
+                lengths[i], reasons[i] = length, reason
     result, i = [], 0
     while i < n:
-        ids = [i, i + 1] if pair[i] else [i]
+        ids = list(range(i, i + lengths[i]))
         live_spans = [spans[k] for k in ids if live[k]]
         span = Span(live_spans[0].start, live_spans[-1].end) if live_spans else None
         label = " ".join(words[k] for k in ids)
@@ -190,7 +208,7 @@ def build_chunks(text: str, words: list[str], spans: list[Span], audio: np.ndarr
             terminal = re.match(r"\s*([?!])", tail)
             if terminal:
                 label += terminal[1]
-        result.append(PlaybackChunk(ids, label, span, candidates[i][1] if pair[i] else "single word",
+        result.append(PlaybackChunk(ids, label, span, reasons[i],
                                     barriers[i - 1] if i else "",
                                     barriers[ids[-1]] if ids[-1] < n - 1 else ""))
         i += len(ids)

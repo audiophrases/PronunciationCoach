@@ -98,3 +98,30 @@ def test_archive_preserves_chunks_and_timing_units(assessment, monkeypatch, tmp_
     assert [c["members"] for c in meta["chunks"]] == [[0, 1], [2, 3]]
     assert meta["chunks"][0]["span"] == {"start": .2, "end": .48}
     assert meta["words"][1]["listener_p"] == .95
+
+
+def test_three_word_group_keeps_individual_selection_and_routes_both_voices(ui, assessment, monkeypatch):
+    app, result = ui
+    state = result[3]
+    state["text"] = "what do you want to watch?"
+    words = state["text"].rstrip("?").split()
+    spans = [Span(.2 + i * .15, .35 + i * .15) for i in range(6)]
+    groups = build_chunks(state["text"], words, spans, assessment.audio)
+    assert groups[0].members == [0, 1, 2]
+    ids = {i: cid for cid, group in enumerate(groups) for i in group.members}
+    state["chunks"] = [{"text": c.text, "members": c.members, "span": (c.span.start, c.span.end)} for c in groups]
+    state["words"] = [{"word": word, "chunk": ids[i], "band": "clear", "span": (sp.start, sp.end),
+                       "tips": ["Feedback for " + word], "guides": [], "expected": [], "heard": []}
+                      for i, (word, sp) in enumerate(zip(words, spans))]
+    state["word_index"] = list(range(6))
+    calls = []
+    monkeypatch.setattr(app, "model_audio", lambda *args: calls.append(args) or "model.mp3")
+    first = app.pick_word(SimpleNamespace(index=0), state, 1., "Male")
+    second = app.pick_word(SimpleNamespace(index=1), state, 1., "Male")
+    third = app.pick_word(SimpleNamespace(index=2), state, 1., "Male")
+    assert second[3] == "model.mp3" and calls[-1][0] == "what do you"
+    assert first[3][0] == third[3][0] == 48000
+    assert np.array_equal(first[3][1], third[3][1])
+    assert "<strong>you</strong>" in third[1] and "Feedback for you" in third[2]
+    app.play_word_model(state, .7, "Female")
+    assert calls[-1] == ("what do you", "en-us", .7, "Female")

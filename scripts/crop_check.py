@@ -17,7 +17,7 @@ checked as they are, without loading any model; older ones are re-assessed.
     uv run python scripts/crop_check.py                 # all archived recordings
     uv run python scripts/crop_check.py --only 2026-09-21 --verbose
     uv run python scripts/crop_check.py --rerun          # re-assess everything with the current code
-    uv run python scripts/crop_check.py --rechunk        # audit playback pairs without models
+    uv run python scripts/crop_check.py --rechunk        # audit playback groups without models
 """
 
 from __future__ import annotations
@@ -81,7 +81,7 @@ def audit_chunks(audio, meta, words, spans, assessment=None):
         dropped = [bool(w["phones"]) and all(p.get("dropped", False) for p in w["phones"]) and not w.get("insertions")
                    for w in meta["words"]]
         chunks = build_chunks(meta["text"], [w[0] for w in words], [Span(*s) for s in spans], audio, dropped, extra)
-    print("   PLAYBACK (at most two words per chunk):")
+    print("   PLAYBACK (usually pairs; connected question openings may use three words):")
     orphan = overlaps = 0
     previous_end = 0.0
     for chunk in chunks:
@@ -108,7 +108,7 @@ def main() -> None:
     ap.add_argument("--only", help="substring of the recording name")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--rerun", action="store_true", help="re-assess with the current code even when crops are archived")
-    ap.add_argument("--rechunk", action="store_true", help="audit current playback pairs from archived audio and word crops")
+    ap.add_argument("--rechunk", action="store_true", help="audit current playback groups from archived audio and word crops")
     args = ap.parse_args()
 
     from pronunciationcoach.audio import load_audio
