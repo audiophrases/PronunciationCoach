@@ -1,10 +1,11 @@
 """Gradio front end.
 
 Learner view: a score ring, the sentence as tappable word chips (tap: you; tap again:
-the model; again: you...), one player at the pace set by one speed slider, a female or
-male model voice, and a word panel with one line of advice per sound that needs work.
-Teacher view: everything technical (timeline, IPA, per-phone table, posterior
-heatmap) in a collapsed section underneath.
+the model; again: you...), one player at the pace set by one speed slider, and a word
+panel with one line of advice per sound that needs work.
+Teacher view: the settings (target accent, female or male model voice) and everything
+technical (timeline, IPA, per-phone table, posterior heatmap) in a collapsed section
+underneath.
 """
 
 from __future__ import annotations
@@ -33,10 +34,6 @@ from pronunciationcoach.viz import posterior_heatmap, timeline_figure
 log = setup_logging()
 PHONETICS = get_phonetics()  # GAPhonetics: how to make each sound (None when unavailable)
 IPA_COLORS = {"good": "#2e8b57", "unsure": "#e0a800", "off": "#c0392b"}
-L1_OPTIONS = ["Catalan", "Spanish", "Other / unknown"]  # plumbed through for the next stage; unused today
-DEFAULT_L1 = os.environ.get("PC_L1", "Catalan")
-if DEFAULT_L1 not in L1_OPTIONS:
-    raise ValueError(f"PC_L1 must be one of {L1_OPTIONS}, got {DEFAULT_L1!r}")
 
 CSS = """
 #sentence .textfield { line-height: 2.9; font-size: 1.55rem; }
@@ -73,9 +70,11 @@ def english_ui() -> gr.I18n:
 
 
 # The model voice: one natural female and one male voice per accent (the same two the
-# scorer uses as native references), chosen in the UI.
+# scorer uses as native references), chosen in the teachers' section.
 VOICE_CHOICES = ["Female", "Male"]
-DEFAULT_VOICE = os.environ.get("PC_VOICE", "Female")
+DEFAULT_VOICE = os.environ.get("PC_VOICE", "Male")
+if DEFAULT_VOICE not in VOICE_CHOICES:
+    raise ValueError(f"PC_VOICE must be one of {VOICE_CHOICES}, got {DEFAULT_VOICE!r}")
 
 
 def model_voice(lang: str, choice: str) -> str:
@@ -245,13 +244,13 @@ def score_card_html(words, summary_text: str) -> str:
     return f"<div class='score-card'>{ring}<div><div class='headline'>{headline}</div>{sections}</div></div>"
 
 
-def run(audio, text, accent_name, l1):
+def run(audio, text, accent_name):
     if audio is None:
         log.warning("assess called without audio")
         raise gr.Error("Record or upload some audio first.")
     sr, samples = audio
     lang = ACCENTS[accent_name]
-    log.debug("request: sr=%d samples=%s text=%r accent=%s L1=%s", sr, getattr(samples, "shape", None), text, accent_name, l1)
+    log.debug("request: sr=%d samples=%s text=%r accent=%s", sr, getattr(samples, "shape", None), text, accent_name)
     try:
         result = assess(samples, sr, text, lang)
     except ValueError as exc:  # e.g. audio far too short for the sentence
@@ -261,7 +260,7 @@ def run(audio, text, accent_name, l1):
         log.exception("assessment failed")
         raise gr.Error(f"Something went wrong: {exc!r}. Details are in {LOG_FILE}") from exc
     audio16k = result.audio
-    log_assessment(log, result, l1, audio16k)
+    log_assessment(log, result, audio16k)
 
     # --- learner view ---------------------------------------------------------
     feedback = [word_feedback(w) for w in result.words]
@@ -476,10 +475,7 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
             audio = gr.Audio(sources=["microphone", "upload"], type="numpy", label="1. Record yourself")
         with gr.Column(scale=3):
             text = gr.Textbox(label="2. The sentence you are reading (leave empty to just talk)", lines=2)
-            with gr.Row():
-                accent = gr.Dropdown(list(ACCENTS), value=DEFAULT_ACCENT, label="Target accent", scale=1)
-                l1 = gr.Dropdown(L1_OPTIONS, value=DEFAULT_L1, label="Your first language", scale=1)
-                button = gr.Button("3. Check my pronunciation", variant="primary", scale=2)
+            button = gr.Button("3. Check my pronunciation", variant="primary")
 
     with gr.Row():
         with gr.Column(scale=2):
@@ -493,14 +489,11 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
                 show_inline_category=False,
                 elem_id="sentence",
             )
-            with gr.Row():
-                speed = gr.Slider(
-                    SPEED_MIN, SPEED_MAX, value=SPEED_DEFAULT, step=SPEED_STEP,
-                    label="Playback speed (you and the model)",
-                    info="1 = as spoken. Around 0.7 is good for hearing the sounds in a word.",
-                    scale=3,
-                )
-                voice = gr.Radio(VOICE_CHOICES, value=DEFAULT_VOICE, label="Model voice", scale=1)
+            speed = gr.Slider(
+                SPEED_MIN, SPEED_MAX, value=SPEED_DEFAULT, step=SPEED_STEP,
+                label="Playback speed (you and the model)",
+                info="1 = as spoken. Around 0.7 is good for hearing the sounds in a word.",
+            )
             with gr.Row():
                 btn_you = gr.Button("▶ You")
                 btn_model = gr.Button("▶ Model")
@@ -521,6 +514,12 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
             guide_md = gr.Markdown()
 
     with gr.Accordion("Technical details (for teachers)", open=False):
+        with gr.Row():
+            accent = gr.Dropdown(
+                list(ACCENTS), value=DEFAULT_ACCENT, label="Target accent",
+                info="Reference pronunciation and model voice. Applies from the next check.",
+            )
+            voice = gr.Radio(VOICE_CHOICES, value=DEFAULT_VOICE, label="Model voice", info="Applies to the next thing played.")
         timeline = gr.Plot(label="Timeline: waveform, energy, spikes, word and sound crops")
         tech_text = gr.Textbox(label="What the recogniser saw", lines=5)
         ipa_hl = gr.HighlightedText(
@@ -538,7 +537,7 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
     state = gr.State()
     button.click(
         run,
-        [audio, text, accent, l1],
+        [audio, text, accent],
         [card, note, words_hl, state, player, word_panel, tech_text, timeline, ipa_hl, table, plot],
     )
     words_hl.select(pick_word, [state, speed, voice], [word_panel, word_head, word_tips, player, state, guide_panel, sound_pick, guide_md])

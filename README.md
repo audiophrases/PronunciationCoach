@@ -33,9 +33,10 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   has its own ▶ You / ▶ Model buttons. One speed slider (0.5-1.5 in steps of 0.05) applies to everything
   played, so you and the model are always compared at the same pace: the model voice is synthesised at
   that rate, your own audio is time-stretched with the pitch kept (ffmpeg atempo). The model voice can
-  be female or male (Jenny / Guy for American, Sonia / Ryan for British; default `PC_VOICE=Female`).
+  be male or female (Guy / Jenny for American, Ryan / Sonia for British; default `PC_VOICE=Male`).
   It is Microsoft Edge's neural TTS via `edge-tts` (cached in `tts_cache/`; falls back to espeak-ng
-  offline). Everything technical sits in a collapsed
+  offline). The learner only sees the recorder, the sentence box and the check button; the target
+  accent and model voice pickers and everything technical sit in a collapsed
   "Technical details (for teachers)" section: timeline, IPA, per-phone table, posterior heatmap.
 * **Word crops** – a second, small model does the cropping: Charsiu's frame-level phonetic
   aligner (`charsiu/en_w2v2_fc_10ms`, ~380 MB) labels every 10 ms with a phone or silence, and a
@@ -112,7 +113,7 @@ phones, timings) plus any errors. Archived recordings can be replayed by draggin
 `score_recording.bat`.
 
 Preferences live at the top of `launchers\_env.bat`: `PC_ACCENT` (General **American** by default, or `British`),
-`PC_L1` (learner's first language shown by default: **Catalan**) and `PC_ASR_MODEL` (Whisper size for free speech).
+`PC_VOICE` (**Male** by default, or `Female`) and `PC_ASR_MODEL` (Whisper size for free speech).
 
 The interface is always in English, whatever the browser's language. Gradio normally translates its own
 buttons ("Record" → "Gravar"); `pronunciationcoach/gradio_ui_english.json` overrides that for every

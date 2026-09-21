@@ -67,7 +67,7 @@ def _stamp() -> str:
     return time.strftime("%Y-%m-%d_%H%M%S")
 
 
-def log_assessment(log: logging.Logger, result: Assessment, l1: str, audio_16k: np.ndarray) -> Path | None:
+def log_assessment(log: logging.Logger, result: Assessment, audio_16k: np.ndarray) -> Path | None:
     """Write the one-line summary (and the details in debug mode); archive the recording if asked."""
     flagged = [
         f"{w.word}/+{p.heard}" if p.inserted else f"{w.word}/{p.expected}->{p.heard_label}({p.gop:.1f})"
@@ -77,10 +77,9 @@ def log_assessment(log: logging.Logger, result: Assessment, l1: str, audio_16k: 
     ]
     timings = " ".join(f"{k}={v:.1f}s" for k, v in result.timings.items())
     log.info(
-        "assess mode=%s accent=%s L1=%s audio=%.1fs | text=%r | heard=%s | flagged=%s | %s",
+        "assess mode=%s accent=%s audio=%.1fs | text=%r | heard=%s | flagged=%s | %s",
         "free" if result.transcribed else "known",
         result.lang,
-        l1,
         result.duration_s,
         result.text,
         result.heard_text,
@@ -115,7 +114,6 @@ def log_assessment(log: logging.Logger, result: Assessment, l1: str, audio_16k: 
         "text": result.text,
         "transcribed": result.transcribed,
         "accent": result.lang,
-        "l1": l1,
         "duration_s": result.duration_s,
         "heard": result.heard_text,
         "words": [

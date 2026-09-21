@@ -13,8 +13,8 @@ set "HF_HUB_DISABLE_SYMLINKS_WARNING=1"
 rem --- Preferences ------------------------------------------------------
 rem Target accent for the reference pronunciation: American (General American) or British.
 set "PC_ACCENT=American"
-rem Default first language shown in the app: Catalan, Spanish or "Other / unknown".
-set "PC_L1=Catalan"
+rem Model voice: Male or Female. Both can be changed in the app under "Technical details (for teachers)".
+set "PC_VOICE=Male"
 rem Whisper size for free-speech mode. base.en fits an 8 GB laptop; small.en is better but needs ~2.3 GB more.
 set "PC_ASR_MODEL=base.en"
 rem Accept natural connected speech (gonna, dunno, dropped t, weak forms): 1. Set 0 for careful-reading practice.
