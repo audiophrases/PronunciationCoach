@@ -117,18 +117,39 @@ def sound_guides(word) -> list[dict]:
 
 
 # What a learner hears when a word is played back: the crop from the original recording, a
-# touch of context on both sides (a hard cut at the exact boundary sounds chopped), short
-# fades against clicks, and a level boost - class recordings are usually quiet.
+# little room on both sides but only through quiet audio (silence, a closure, breath - never
+# a neighbouring word's vowel, which is what "it plays the previous word" was), short fades
+# against clicks, and a level boost - class recordings are usually quiet.
 PAD_BEFORE_S = 0.06
-PAD_AFTER_S = 0.04
+PAD_AFTER_S = 0.05
+PAD_QUIET_DB = 18.0  # a pad frame must be this far below the word's own loudest 20 ms
 FADE_S = 0.01
 TARGET_PEAK = 0.7
 MAX_GAIN = 8.0
 
 
 def clip(audio: np.ndarray, start: float, end: float, sr: int = SAMPLE_RATE) -> tuple[int, np.ndarray]:
-    a = max(0, int((start - PAD_BEFORE_S) * sr))
-    b = min(len(audio), int((end + PAD_AFTER_S) * sr))
+    a = max(0, int(start * sr))
+    b = min(len(audio), int(end * sr))
+    win = max(1, int(0.005 * sr))
+
+    def rms(x) -> float:
+        return float(np.sqrt(np.mean(np.square(x, dtype=np.float32)))) if len(x) else 0.0
+
+    core = np.asarray(audio[a:b], dtype=np.float32)
+    n = len(core) // win
+    if n >= 4:
+        frames = np.sqrt(np.mean(np.square(core[: n * win]).reshape(n, win), axis=1))
+        loud = float(np.max(np.convolve(frames, np.ones(4) / 4, mode="valid")))  # loudest 20 ms
+    else:
+        loud = rms(core)
+    thr = loud * 10 ** (-PAD_QUIET_DB / 20)
+    lim = max(0, a - int(PAD_BEFORE_S * sr))
+    while a - win >= lim and rms(audio[a - win : a]) < thr:
+        a -= win
+    lim = min(len(audio), b + int(PAD_AFTER_S * sr))
+    while b + win <= lim and rms(audio[b : b + win]) < thr:
+        b += win
     out = np.array(audio[a:b], dtype=np.float32)
     n = min(int(FADE_S * sr), len(out) // 2)
     if n > 0:

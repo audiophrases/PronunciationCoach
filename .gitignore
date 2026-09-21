@@ -36,3 +36,4 @@ logs/
 
 # Synthesised model pronunciations (regenerated on demand)
 tts_cache/
+debug.log

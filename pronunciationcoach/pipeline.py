@@ -13,6 +13,7 @@ from .align import ExtraRun, Segment, align_words, greedy_decode
 from .asr import transcribe_words
 from .listener import match_words
 from .audio import duration_s, to_mono_16k
+from . import SAMPLE_RATE
 from .boundaries import HOP, SPIKE_LAG_S, Span, energy_db, word_spans
 from .engine import DEFAULT_MODEL, Emissions, get_engine
 from .g2p import text_to_phones
@@ -34,6 +35,7 @@ class Assessment:
     audio: np.ndarray  # the 16 kHz mono signal that was scored
     spans: list[Span] = field(default_factory=list)  # where each word is, for replay
     span_source: str = "spikes"  # "charsiu" (frame aligner) or "spikes" (fallback)
+    span_cases: list[str] = field(default_factory=list)  # how each start was settled: onset / dip / join
     reference_voices: list[str] = field(default_factory=list)  # native renderings the scorer listened to
     unknown_phones: list[str] = field(default_factory=list)  # expected phones the model has no label for
     timings: dict[str, float] = field(default_factory=dict)
@@ -145,7 +147,7 @@ def assess(
     timings["score"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    spans, span_source = locate_words(audio, word_phones, words, segments, alignment.extra, em.frame_ms)
+    spans, span_source, span_cases = locate_words(audio, word_phones, words, segments, alignment.extra, em.frame_ms)
     timings["crop"] = time.perf_counter() - t0
 
     return Assessment(
@@ -161,6 +163,7 @@ def assess(
         audio=audio,
         spans=spans,
         span_source=span_source,
+        span_cases=span_cases,
         reference_voices=list(ref.renderings) if ref else [],
         unknown_phones=unknown,
         timings=timings,
@@ -173,7 +176,7 @@ WINDOW_BEFORE_S = 0.25
 WINDOW_AFTER_S = 0.25
 
 
-def locate_words(audio, word_phones, words, segments, extra, frame_ms) -> tuple[list[Span], str]:
+def locate_words(audio, word_phones, words, segments, extra, frame_ms) -> tuple[list[Span], str, list[str]]:
     """Word crops from Charsiu's frame aligner, anchored to the scoring aligner's spikes so
     repeats and hesitations (the wildcard runs) cannot be swallowed by a neighbouring word.
     Falls back to the spike-based estimate if the aligner is unavailable."""
@@ -203,50 +206,91 @@ def locate_words(audio, word_phones, words, segments, extra, frame_ms) -> tuple[
             windows.append((max(0.0, lo), hi))
         extras = [(r.start * frame_s, r.end * frame_s) for r in extra if len(r.phones) >= 2]
         spans = seg.align(seg.frame_log_probs(audio), [to_arpabet(wp.phones) for wp in word_phones], windows, extras)
-        spans = reconcile(spans, [kept(i) for i in range(len(by_word))], frame_s)
-        return trim_leading_silence(spans, [kept(i) for i in range(len(by_word))], audio, frame_s), "charsiu"
+        spans, cases = settle_starts(spans, [kept(i) for i in range(len(by_word))], audio, frame_s)
+        return spans, "charsiu", cases
     except Exception as exc:  # model not downloadable, out of memory, ...
         logging.getLogger("pronunciationcoach").warning("Charsiu segmenter unavailable (%s); using spike-based crops", exc)
-    return word_spans(audio, by_word, dropped, frame_ms), "spikes"
+    return word_spans(audio, by_word, dropped, frame_ms), "spikes", []
 
 
-# On real recordings Charsiu tends to place a word's onset late (a quiet initial consonant gets
-# labelled as the previous sound), which clips the very sound a learner listens for. The scoring
-# model's spikes are more robust there: a sound starts ~SPIKE_LAG_S before its spike.
+# Where exactly does a word start? Two estimates disagree in opposite ways. Charsiu's frame
+# labels place the transition well when the sound changes cleanly, but on real recordings they
+# run late for quiet onsets (a stop's closure and burst, a fricative, h, a nasal): the previous
+# vowel is extended over them, and the learner's clip loses the very sound they tap the word
+# for. The scoring model's spikes (a sound starts ~SPIKE_LAG_S before its spike) are robust
+# there but vague after a vowel, and a start pulled back that far takes the previous word's
+# vowel with it - and the previous word's own last spike can fire *after* our first sound has
+# begun, so it is no floor either. The audio is the referee, read with the phone sequence:
+#   onset - silence before the word: it starts where sound resumes (a burst, a fricative);
+#   dip   - the word starts with a quiet consonant after a vowel and the audio shows the valley
+#           Charsiu skipped: take the valley's start;
+#   join  - anything else: Charsiu's boundary, never later than the spike allows.
 ONSET_SLACK_S = 0.02
-OVERLAP_S = 0.04  # a word may start this much before the previous word's last spike ends
+SEARCH_BEFORE_S = 0.10  # how far before the earlier candidate a word's first sound may begin
+SILENCE_ABOVE_FLOOR_DB = 6.0  # below this the frame is background, not a quiet consonant
+DIP_DB = 6.0  # a quiet consonant's valley is at least this deep on both sides
+RISE_TOL_S = 0.05  # ...and Charsiu started the word about where the valley ends
+LATE_TOL_S = 0.06  # a start later than the spike onset plus this is certainly late
+QUIET_ONSETS = set("pbtdkgɡfvθðszʃʒhmnŋɾ") | {"tʃ", "dʒ"}
 
 
-def reconcile(spans: list[Span], kept: list[list[Segment]], frame_s: float) -> list[Span]:
-    """Pull each word's start back to its first spike's onset when Charsiu put it later, and
-    keep the previous word from running past that point."""
+def settle_starts(spans: list[Span], kept: list[list[Segment]], audio: np.ndarray, frame_s: float) -> tuple[list[Span], list[str]]:
+    """Settle each word's start between Charsiu's boundary and the spike-based onset using
+    the audio's energy (see above); the previous word ends where the next one starts."""
+    db = energy_db(audio)
+    step = HOP / SAMPLE_RATE
+    silent = float(np.percentile(db, 10)) + SILENCE_ABOVE_FLOOR_DB
+
+    def level(t: float) -> float:
+        return float(db[min(max(int(round(t / step)), 0), len(db) - 1)])
+
+    def ticks(a: float, b: float) -> list[float]:
+        return [k * step for k in range(int(np.ceil(a / step - 1e-6)), int(np.floor(b / step + 1e-6)) + 1)]
+
+    def valley_start(lo: float, hi: float, c: float) -> float | None:
+        """Start of the valley in [lo, hi] that is at least DIP_DB deep after a peak and whose
+        rise is where Charsiu began the word - the quiet consonant it handed to the previous
+        word. Of several (a closure, then the word's own fricative) the one at Charsiu's boundary."""
+        times = ticks(lo, hi)
+        levels = [level(t) for t in times]
+        best: tuple[float, float] | None = None
+        for k in range(1, len(times) - 1):
+            if not (levels[k] <= levels[k - 1] and levels[k] <= levels[k + 1]):
+                continue  # not a local minimum
+            peak = int(np.argmax(levels[:k]))
+            if levels[peak] - levels[k] < DIP_DB:
+                continue
+            half = (levels[peak] + levels[k]) / 2
+            rise = next((t for t, lv in zip(times[k:], levels[k:]) if lv >= half), None)
+            if rise is None or abs(rise - c) > RISE_TOL_S:
+                continue
+            start = next(t for t, lv in zip(times[peak:], levels[peak:]) if lv < half)
+            if best is None or abs(rise - c) < best[0]:
+                best = (abs(rise - c), start)
+        return best[1] if best else None
+
     out = [Span(sp.start, sp.end) for sp in spans]
+    cases: list[str] = []
     for i, (sp, segs) in enumerate(zip(out, kept)):
-        onset = segs[0].start * frame_s - SPIKE_LAG_S - ONSET_SLACK_S
-        if onset < sp.start:
-            floor = kept[i - 1][-1].end * frame_s - OVERLAP_S if i > 0 else 0.0  # not into the previous word's last sound
-            sp.start = max(onset, floor, 0.0)
-            if i > 0 and out[i - 1].end > sp.start:
-                out[i - 1].end = sp.start
+        c = sp.start
+        s = segs[0].start * frame_s - SPIKE_LAG_S - ONSET_SLACK_S
+        early, late = min(c, s), max(c, s)
+        lo = max(0.0, early - SEARCH_BEFORE_S)
+        quiet = [t for t in ticks(lo, s) if level(t) < silent]
+        if quiet:
+            start, case = quiet[-1] + step, "onset"  # sound resumes here; a near-silent h is kept
+        else:
+            start, case = c, "join"
+            ours = segs[0].phone in QUIET_ONSETS and (i == 0 or kept[i - 1][-1].phone not in QUIET_ONSETS)
+            if ours:
+                v = valley_start(lo, late + RISE_TOL_S, c)
+                if v is not None:
+                    start, case = v, "dip"
+        start = min(start, s + LATE_TOL_S)
+        sp.start = min(max(start, lo, 0.0), max(late, lo))
+        if i > 0 and out[i - 1].end > sp.start:
+            out[i - 1].end = sp.start
         if sp.end < sp.start + 0.03:
             sp.end = sp.start + 0.03
-    return out
-
-
-SILENCE_ABOVE_FLOOR_DB = 6.0  # below this the frame is background, not a quiet consonant
-MAX_TRIM_S = 0.12
-
-
-def trim_leading_silence(spans: list[Span], kept: list[list[Segment]], audio: np.ndarray, frame_s: float) -> list[Span]:
-    """After a pause a crop can begin with background noise: shave it, but only true silence
-    (near the noise floor), never past the first sound's onset, and at most MAX_TRIM_S."""
-    db = energy_db(audio)
-    thr = float(np.percentile(db, 10)) + SILENCE_ABOVE_FLOOR_DB
-    step = HOP / 16000.0
-    for sp, segs in zip(spans, kept):
-        limit = min(segs[0].start * frame_s - SPIKE_LAG_S, sp.start + MAX_TRIM_S)
-        t = sp.start
-        while t + step <= limit and db[min(int(t / step), len(db) - 1)] < thr:
-            t += step
-        sp.start = t
-    return spans
+        cases.append(case)
+    return out, cases

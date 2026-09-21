@@ -38,16 +38,24 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
 * **Word crops** – a second, small model does the cropping: Charsiu's frame-level phonetic
   aligner (`charsiu/en_w2v2_fc_10ms`, ~380 MB) labels every 10 ms with a phone or silence, and a
   Viterbi (`segmenter.py`) fits the expected words to it, anchored to the scoring model's spikes so
-  repeats and hesitations are excluded. On real recordings Charsiu places word onsets late (a
-  quiet initial consonant gets labelled as the previous sound), so each start is reconciled with
-  the scoring model's spike onset and leading background noise is trimmed (`pipeline.py`).
-  `scripts/crop_check.py` audits every archived recording: which of the recogniser's sounds each
-  crop contains, which of the word's own it misses, which of the neighbours' it bleeds. Current
-  result on the archive: 1 % of sounds clipped, no bleed. Against Edge TTS word boundaries the raw
-  Charsiu crops are within ~17 / ~23 ms; `scripts/calibrate_spikes.py` reproduces that.
-  If Charsiu is unavailable the spike-based estimate in `boundaries.py` is used instead.
-  Playback clips take the recording at its original rate, add 60/40 ms of context, 10 ms fades and
-  a level boost, then follow the speed slider.
+  repeats and hesitations are excluded. Each word's *start* is then settled with the audio as the
+  referee (`settle_starts` in `pipeline.py`), because the two estimates fail in opposite ways:
+  Charsiu runs late on quiet onsets (a stop's closure, a fricative, *h*, a nasal) and hands them to
+  the previous word, while the spike-based onset can reach back into the previous word's vowel -
+  and the previous word's own last spike may fire after our first sound has begun, so it is no
+  floor either. Three cases: **onset** (silence before the word: start where sound resumes, e.g.
+  at a k's burst), **dip** (the word starts with a quiet consonant after a vowel and the energy
+  shows the valley Charsiu skipped, its rise at Charsiu's boundary: start at the valley), **join**
+  (anything else, including a consonant that belongs to the previous word: Charsiu's boundary,
+  never later than the spike allows). Each decision is logged (`crops (charsiu): can 0.59-0.88
+  onset | ...`) and archived with the recording. `scripts/crop_check.py` audits archived recordings
+  without loading any model: per word, ms of the first sound cut, of the previous/next word
+  included, of the last sound cut, and edge silence. Against Edge TTS word boundaries the raw
+  Charsiu crops are within ~17 / ~23 ms (`scripts/calibrate_spikes.py`). If Charsiu is unavailable
+  the spike-based estimate in `boundaries.py` is used instead.
+  Playback clips take the recording at its original rate and add up to 60/50 ms of room on either
+  side **only through quiet audio** (silence, a closure, breath - never a neighbour's vowel), with
+  10 ms fades and a level boost, then follow the speed slider.
 * **Speech, not dictionary words** – three things stop natural, connected speech from being
   penalised. (1) *Native reference by example*: the sentence is synthesised with two natural
   voices and run through our own recogniser, and whatever it hears a native do in that position

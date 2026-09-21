@@ -96,6 +96,9 @@ def log_assessment(log: logging.Logger, result: Assessment, l1: str, audio_16k: 
         log.info("native reference %s | accepted as natural: %s", result.reference_voices, " ".join(natural) or "none")
     if result.unknown_phones:
         log.warning("expected phones without a model label: %s", result.unknown_phones)
+    cases = result.span_cases or [""] * len(result.spans)
+    log.info("crops (%s): %s", result.span_source,
+             " | ".join(f"{w.word} {sp.start:.2f}-{sp.end:.2f} {case}".rstrip() for w, sp, case in zip(result.words, result.spans, cases)))
     if log.isEnabledFor(logging.DEBUG):
         for w in result.words:
             for p in w.phones:
@@ -116,8 +119,12 @@ def log_assessment(log: logging.Logger, result: Assessment, l1: str, audio_16k: 
         "duration_s": result.duration_s,
         "heard": result.heard_text,
         "words": [
-            {"word": w.word, "gop_min": w.gop_min, "phones": [asdict(p) for p in w.phones]} for w in result.words
+            {"word": w.word, "gop_min": w.gop_min, "span": [round(sp.start, 3), round(sp.end, 3)], "crop": case,
+             "phones": [asdict(p) for p in w.phones]}
+            for w, sp, case in zip(result.words, result.spans, result.span_cases or [""] * len(result.spans))
         ],
+        "span_source": result.span_source,
+        "extra": [[r.phones, r.start, r.end] for r in result.extra],
         "timings": result.timings,
     }
     stem.with_suffix(".json").write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding="utf-8")
