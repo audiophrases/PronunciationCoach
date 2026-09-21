@@ -17,6 +17,7 @@ from . import SAMPLE_RATE
 from .boundaries import HOP, SPIKE_LAG_S, Span, energy_db, word_spans
 from .chunks import PlaybackChunk, build_chunks, safe_spans
 from .crop_recheck import CropCheck, CropEvidence, recheck_chunks
+from .crop_verify import TranscriptCheck, verify_chunks
 from .engine import DEFAULT_MODEL, Emissions, get_engine
 from .g2p import text_to_phones
 from .reference import acceptances, native_reference
@@ -45,6 +46,7 @@ class Assessment:
     chunks: list[PlaybackChunk] = field(default_factory=list)
     crop_checks: list[CropCheck] = field(default_factory=list)
     crop_recheck_mode: str = "disabled"
+    transcript_checks: list[TranscriptCheck] = field(default_factory=list)
 
     @property
     def phones(self):
@@ -167,14 +169,23 @@ def assess(
     timings["chunk"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    recheck_mode = os.environ.get("PC_CROP_RECHECK", "audit").lower()
+    recheck_mode = os.environ.get("PC_CROP_RECHECK", "1").lower()
     crop_checks = []
+    transcript_checks = []
     if recheck_mode != "0" and crop_evidence:
+        # Alignment proposals supply suspicion/evidence. Playback adjustments
+        # now require detection and verification by the existing word listener.
         chunks, crop_checks = recheck_chunks(chunks, crop_evidence[0], duration_s(audio), dropped_words,
-                                            apply=recheck_mode == "1")
-        recheck_mode = "apply" if recheck_mode == "1" else "audit"
+                                            apply=False)
+    if recheck_mode != "0" and heard_words is not None:
+        chunks, transcript_checks = verify_chunks(
+            chunks, audio, heard_words, evidence=crop_evidence[0] if crop_evidence else None,
+            suspicious={c.chunk for c in crop_checks},
+            protected={i for i, w in enumerate(words) if dropped_words[i] or w.insertions},
+            apply=recheck_mode != "audit")
+        recheck_mode = "audit" if recheck_mode == "audit" else "apply"
     else:
-        recheck_mode = "disabled" if recheck_mode == "0" else "unavailable"
+        recheck_mode = "disabled" if recheck_mode == "0" else "listener-unavailable"
     timings["crop_recheck"] = time.perf_counter() - t0
 
     return Assessment(
@@ -197,6 +208,7 @@ def assess(
         chunks=chunks,
         crop_checks=crop_checks,
         crop_recheck_mode=recheck_mode,
+        transcript_checks=transcript_checks,
     )
 
 

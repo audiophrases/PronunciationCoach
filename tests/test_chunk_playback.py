@@ -91,9 +91,12 @@ def test_explicit_buttons_speed_and_missing_audio(ui, monkeypatch):
 def test_archive_preserves_chunks_and_timing_units(assessment, monkeypatch, tmp_path):
     from pronunciationcoach import logs
     from pronunciationcoach.crop_recheck import CropCheck
+    from pronunciationcoach.crop_verify import TranscriptCheck
     assessment.crop_recheck_mode = "audit"
     assessment.crop_checks = [CropCheck(0, "can you", Span(.2, .48), Span(.18, .48), Span(.2, .48),
                                       ["possibly clipped onset"], "uncertain", "insufficient evidence")]
+    assessment.transcript_checks = [TranscriptCheck(0, "can you", Span(.2, .48), Span(.2, .48),
+                                                   status="matched", heard_before="can you")]
     monkeypatch.setattr(logs, "SAVE_RECORDINGS", True)
     monkeypatch.setattr(logs, "REC_DIR", tmp_path)
     wav = logs.log_assessment(logging.getLogger("chunk-archive-test"), assessment, assessment.audio)
@@ -105,6 +108,23 @@ def test_archive_preserves_chunks_and_timing_units(assessment, monkeypatch, tmp_
     assert meta["crop_recheck_mode"] == "audit"
     assert meta["crop_checks"][0]["before"] == {"start": .2, "end": .48}
     assert meta["crop_checks"][0]["status"] == "uncertain"
+    assert meta["transcript_checks"][0]["heard_before"] == "can you"
+    assert meta["chunks"][0]["pad_before"] is True
+
+
+def test_verified_trim_survives_state_packing_and_cannot_regain_padding(ui, assessment):
+    app, _ = ui
+    assessment.chunks[0].span = Span(.24, .48)
+    assessment.chunks[0].pad_before = False
+    original = np.full(48000*2, .2, dtype=np.float32)
+    original[:int(.24*48000)] = 0
+    result = app.run((48000, original), assessment.text, "American")
+    state = result[3]
+    assert state["chunks"][0]["pad_before"] is False
+    assert state["words"][0]["span"] == (.2, .4)  # scoring still uses original word crop
+    played = app.pick_word(SimpleNamespace(index=0), state, 1., "Male")[3]
+    assert played[0] == 48000
+    assert len(played[1]) == int(.48*48000) - int(.24*48000)
 
 
 def test_three_word_group_keeps_individual_selection_and_routes_both_voices(ui, assessment, monkeypatch):

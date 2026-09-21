@@ -102,6 +102,8 @@ def audit_chunks(audio, meta, words, spans, assessment=None):
         print(f"   Second pass: {assessment.crop_recheck_mode}")
         for check in assessment.crop_checks:
             print(f"     {check.summary()}")
+        for check in assessment.transcript_checks:
+            print(f"     Playback verification: {check.summary()}")
     if meta.get("chunks") is not None:
         changed = [c.members for c in chunks] != [c["members"] for c in meta["chunks"]]
         print(f"   Membership changed from archive: {changed}")

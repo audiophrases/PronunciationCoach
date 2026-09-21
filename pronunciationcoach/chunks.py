@@ -43,6 +43,8 @@ class PlaybackChunk:
     reason: str
     blocked_before: str = ""
     blocked_after: str = ""
+    pad_before: bool = True
+    pad_after: bool = True
 
 
 def safe_spans(spans: list[Span], duration: float, dropped: list[bool]) -> list[Span]:

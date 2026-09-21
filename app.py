@@ -27,6 +27,7 @@ from pronunciationcoach.g2p import ACCENTS, DEFAULT_ACCENT
 from pronunciationcoach.phonetics import get_phonetics
 from pronunciationcoach.logs import DEBUG, LOG_FILE, SAVE_RECORDINGS, log_assessment, setup_logging
 from pronunciationcoach.pipeline import assess
+from pronunciationcoach.playback import FADE_S, MAX_GAIN, PAD_AFTER_S, PAD_BEFORE_S, PAD_QUIET_DB, TARGET_PEAK, clip
 from pronunciationcoach.scoring import GOP_GOOD, GOP_UNSURE
 from pronunciationcoach.tts import REFERENCE_VOICES, synthesize
 from pronunciationcoach.viz import posterior_heatmap, timeline_figure
@@ -124,52 +125,6 @@ def sound_guides(word) -> list[dict]:
             "word": PHONETICS.audio_path(t.word_audio),
         })
     return guides
-
-
-# What a learner hears when a word is played back: the crop from the original recording, a
-# little room on both sides but only through quiet audio (silence, a closure, breath - never
-# a neighbouring word's vowel, which is what "it plays the previous word" was), short fades
-# against clicks, and a level boost - class recordings are usually quiet.
-PAD_BEFORE_S = 0.06
-PAD_AFTER_S = 0.05
-PAD_QUIET_DB = 18.0  # a pad frame must be this far below the word's own loudest 20 ms
-FADE_S = 0.01
-TARGET_PEAK = 0.7
-MAX_GAIN = 8.0
-
-
-def clip(audio: np.ndarray, start: float, end: float, sr: int = SAMPLE_RATE) -> tuple[int, np.ndarray]:
-    a = max(0, int(start * sr))
-    b = min(len(audio), int(end * sr))
-    win = max(1, int(0.005 * sr))
-
-    def rms(x) -> float:
-        return float(np.sqrt(np.mean(np.square(x, dtype=np.float32)))) if len(x) else 0.0
-
-    core = np.asarray(audio[a:b], dtype=np.float32)
-    n = len(core) // win
-    if n >= 4:
-        frames = np.sqrt(np.mean(np.square(core[: n * win]).reshape(n, win), axis=1))
-        loud = float(np.max(np.convolve(frames, np.ones(4) / 4, mode="valid")))  # loudest 20 ms
-    else:
-        loud = rms(core)
-    thr = loud * 10 ** (-PAD_QUIET_DB / 20)
-    lim = max(0, a - int(PAD_BEFORE_S * sr))
-    while a - win >= lim and rms(audio[a - win : a]) < thr:
-        a -= win
-    lim = min(len(audio), b + int(PAD_AFTER_S * sr))
-    while b + win <= lim and rms(audio[b : b + win]) < thr:
-        b += win
-    out = np.array(audio[a:b], dtype=np.float32)
-    n = min(int(FADE_S * sr), len(out) // 2)
-    if n > 0:
-        ramp = 0.5 - 0.5 * np.cos(np.linspace(0, np.pi, n, dtype=np.float32))
-        out[:n] *= ramp
-        out[-n:] *= ramp[::-1]
-    peak = float(np.abs(out).max()) if len(out) else 0.0
-    if peak > 0:
-        out *= min(TARGET_PEAK / peak, MAX_GAIN)
-    return sr, out
 
 
 # Playback speed: one slider for everything that can be played, so you and the model are
@@ -294,7 +249,8 @@ def run(audio, text, accent_name):
         "orig": (int(sr), orig),  # the recording as it came in, for playback
         "word_index": word_index,
         "chunks": [{"text": c.text, "members": c.members,
-                    "span": (c.span.start, c.span.end) if c.span else None} for c in result.chunks],
+                    "span": (c.span.start, c.span.end) if c.span else None,
+                    "pad_before": c.pad_before, "pad_after": c.pad_after} for c in result.chunks],
         "words": [
             {
                 "word": w.word,
@@ -345,6 +301,7 @@ def run(audio, text, accent_name):
         + "Playback: " + " | ".join(f"[{c.text}] ({c.reason})" for c in result.chunks) + "\n"
         + f"Crop recheck: {result.crop_recheck_mode}\n"
         + "".join(c.summary() + "\n" for c in result.crop_checks)
+        + "".join("Playback verification: " + c.summary() + "\n" for c in result.transcript_checks)
         + ("Sound guidance and clips: GAPhonetics (human US recordings; Wiktionary/Wikimedia Commons contributors, CC BY-SA 3.0 / CC0 - credits in its *-audio-sources.json)\n" if PHONETICS else "")
         + f"{result.duration_s:.1f} s of audio · {timing}"
     )
@@ -391,7 +348,9 @@ def _word_clip(state, w, speed):
     if chunk["span"] is None or chunk["span"][1] <= chunk["span"][0]:
         return None
     sr, orig = state.get("orig", (SAMPLE_RATE, state["audio"]))
-    return retimed(*clip(orig, *chunk["span"], sr=sr), _speed(speed))
+    return retimed(*clip(orig, *chunk["span"], sr=sr,
+                         pad_before=chunk.get("pad_before", True),
+                         pad_after=chunk.get("pad_after", True)), _speed(speed))
 
 
 def _chunk_for(state, w):

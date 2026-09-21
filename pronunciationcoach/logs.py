@@ -101,6 +101,7 @@ def log_assessment(log: logging.Logger, result: Assessment, audio_16k: np.ndarra
     log.info("playback: %s", " | ".join(f"[{c.text}] {c.reason}" for c in result.chunks))
     log.info("crop recheck (%s): %s", result.crop_recheck_mode,
              " | ".join(c.summary() for c in result.crop_checks) or "no flagged edges")
+    log.info("playback verification: %s", " | ".join(c.summary() for c in result.transcript_checks) or "not run")
     if log.isEnabledFor(logging.DEBUG):
         for w in result.words:
             for p in w.phones:
@@ -123,6 +124,7 @@ def log_assessment(log: logging.Logger, result: Assessment, audio_16k: np.ndarra
         "chunks": [asdict(c) for c in result.chunks],
         "crop_recheck_mode": result.crop_recheck_mode,
         "crop_checks": [asdict(c) for c in result.crop_checks],
+        "transcript_checks": [asdict(c) for c in result.transcript_checks],
         "heard": result.heard_text,
         "words": [
             {"word": w.word, "gop_min": w.gop_min, "span": [round(sp.start, 3), round(sp.end, 3)], "crop": case,

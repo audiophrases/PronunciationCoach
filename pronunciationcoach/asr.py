@@ -38,10 +38,11 @@ def _model(size: str):
     return WhisperModel(size, device="cpu", compute_type="int8")
 
 
-def transcribe_words(audio_16k: np.ndarray, size: str = DEFAULT_ASR) -> tuple[str, list[HeardWord]]:
+def transcribe_words(audio_16k: np.ndarray, size: str = DEFAULT_ASR, *, isolated: bool = False) -> tuple[str, list[HeardWord]]:
     """The transcript, and each word with the probability Whisper gave it."""
+    options = {"condition_on_previous_text": False, "temperature": 0.0, "max_new_tokens": 32} if isolated else {}
     segments, _info = _model(size).transcribe(
-        audio_16k, language="en", beam_size=5, vad_filter=False, word_timestamps=True
+        audio_16k, language="en", beam_size=5, vad_filter=False, word_timestamps=True, **options
     )
     text_parts: list[str] = []
     words: list[HeardWord] = []
@@ -50,6 +51,11 @@ def transcribe_words(audio_16k: np.ndarray, size: str = DEFAULT_ASR) -> tuple[st
         for w in seg.words or []:
             words.append(HeardWord(w.word.strip(), float(w.probability), float(w.start), float(w.end)))
     return " ".join(text_parts).strip(), words
+
+
+def transcribe_crop(audio_16k: np.ndarray) -> tuple[str, list[HeardWord]]:
+    """Hear a finished crop without supplying its expected text as a prompt."""
+    return transcribe_words(audio_16k, isolated=True)
 
 
 def transcribe(audio_16k: np.ndarray, size: str = DEFAULT_ASR) -> str:
