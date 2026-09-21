@@ -35,8 +35,8 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   that rate, your own audio is time-stretched with the pitch kept (ffmpeg atempo). The model voice can
   be male or female (Guy / Jenny for American, Ryan / Sonia for British; default `PC_VOICE=Male`).
   It is Microsoft Edge's neural TTS via `edge-tts` (cached in `tts_cache/`; falls back to espeak-ng
-  offline). The learner only sees the recorder, the sentence box and the check button; the target
-  accent and model voice pickers and everything technical sit in a collapsed
+  offline). The input row is just the recorder, the sentence box and the check button; the target
+  accent and model voice pickers sit with everything technical in a collapsed
   "Technical details (for teachers)" section: timeline, IPA, per-phone table, posterior heatmap.
 * **Word crops** – a second, small model does the cropping: Charsiu's frame-level phonetic
   aligner (`charsiu/en_w2v2_fc_10ms`, ~380 MB) labels every 10 ms with a phone or silence, and a
