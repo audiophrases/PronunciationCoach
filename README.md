@@ -26,14 +26,16 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
        └─ wav2vec2 phoneme CTC ──→ posterior grid ──→ greedy decode ──→ "what was heard"
 ```
 
-* **Learner view** – a score ring, the sentence as tappable word chips (clear / almost /
-  work on this), one player that speaks whatever you tap: the whole sentence (you or the model)
-  or one word, with a line of plain-language advice per sound that needs work. One speed slider
-  (0.5-1.5 in steps of 0.05) applies to everything played, so you and the model are always compared
-  at the same pace: the model voice is synthesised at that rate, your own audio is time-stretched
-  with the pitch kept (ffmpeg atempo).
-  The model voice is Microsoft Edge's neural TTS via `edge-tts` (cached in `tts_cache/`; falls
-  back to espeak-ng offline). Everything technical sits in a collapsed
+* **Learner view** – a score ring, the sentence as tappable word chips (clear / accent / almost /
+  work on this), one player that speaks whatever you tap, with a line of plain-language advice per
+  sound that needs work. Tapping a word plays what *you* said; tapping the same word again plays the
+  model saying it; again, you - and so on, the quickest way to hear a difference. The whole sentence
+  has its own ▶ You / ▶ Model buttons. One speed slider (0.5-1.5 in steps of 0.05) applies to everything
+  played, so you and the model are always compared at the same pace: the model voice is synthesised at
+  that rate, your own audio is time-stretched with the pitch kept (ffmpeg atempo). The model voice can
+  be female or male (Jenny / Guy for American, Sonia / Ryan for British; default `PC_VOICE=Female`).
+  It is Microsoft Edge's neural TTS via `edge-tts` (cached in `tts_cache/`; falls back to espeak-ng
+  offline). Everything technical sits in a collapsed
   "Technical details (for teachers)" section: timeline, IPA, per-phone table, posterior heatmap.
 * **Word crops** – a second, small model does the cropping: Charsiu's frame-level phonetic
   aligner (`charsiu/en_w2v2_fc_10ms`, ~380 MB) labels every 10 ms with a phone or silence, and a

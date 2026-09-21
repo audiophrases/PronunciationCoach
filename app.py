@@ -1,8 +1,8 @@
 """Gradio front end.
 
-Learner view: a score ring, the sentence as tappable word chips, one player that
-speaks whatever was tapped (you, the model, one word) at the pace set by one speed
-slider, and a word panel with one line of advice per sound that needs work.
+Learner view: a score ring, the sentence as tappable word chips (tap: you; tap again:
+the model; again: you...), one player at the pace set by one speed slider, a female or
+male model voice, and a word panel with one line of advice per sound that needs work.
 Teacher view: everything technical (timeline, IPA, per-phone table, posterior
 heatmap) in a collapsed section underneath.
 """
@@ -27,7 +27,7 @@ from pronunciationcoach.phonetics import get_phonetics
 from pronunciationcoach.logs import DEBUG, LOG_FILE, SAVE_RECORDINGS, log_assessment, setup_logging
 from pronunciationcoach.pipeline import assess
 from pronunciationcoach.scoring import GOP_GOOD, GOP_UNSURE
-from pronunciationcoach.tts import synthesize
+from pronunciationcoach.tts import REFERENCE_VOICES, synthesize
 from pronunciationcoach.viz import posterior_heatmap, timeline_figure
 
 log = setup_logging()
@@ -72,9 +72,20 @@ def english_ui() -> gr.I18n:
     return gr.I18n(**translations)
 
 
-def model_audio(text: str, lang: str, speed: float) -> str | None:
+# The model voice: one natural female and one male voice per accent (the same two the
+# scorer uses as native references), chosen in the UI.
+VOICE_CHOICES = ["Female", "Male"]
+DEFAULT_VOICE = os.environ.get("PC_VOICE", "Female")
+
+
+def model_voice(lang: str, choice: str) -> str:
+    female, male = REFERENCE_VOICES.get(lang, REFERENCE_VOICES["en-us"])[:2]
+    return male if choice == "Male" else female
+
+
+def model_audio(text: str, lang: str, speed: float, voice: str = DEFAULT_VOICE) -> str | None:
     try:
-        return str(synthesize(text, lang, speed))
+        return str(synthesize(text, lang, speed, voice=model_voice(lang, voice)))
     except Exception:
         log.exception("could not synthesise %r", text)
         return None
@@ -296,6 +307,7 @@ def run(audio, text, accent_name, l1):
             for w, f, sp in zip(result.words, feedback, w_spans)
         ],
         "current": None,
+        "turn": "you",  # what the next tap on the current word plays: "you" or "model"
     }
 
     # --- teacher view ---------------------------------------------------------
@@ -355,10 +367,10 @@ def play_you(state, speed):
     return retimed(sr, orig, _speed(speed))
 
 
-def play_model(state, speed):
+def play_model(state, speed, voice):
     if not state:
         return None
-    return model_audio(state["text"], state["lang"], _speed(speed))
+    return model_audio(state["text"], state["lang"], _speed(speed), voice)
 
 
 def _current(state):
@@ -374,12 +386,25 @@ def _word_clip(state, w, speed):
 
 def play_word_you(state, speed):
     w = _current(state)
-    return _word_clip(state, w, speed) if w else None
+    if not w:
+        return None, state
+    state["turn"] = "you"  # the next tap on the word plays the model
+    return _word_clip(state, w, speed), state
 
 
-def play_word_model(state, speed):
+def play_word_model(state, speed, voice):
     w = _current(state)
-    return model_audio(w["word"], state["lang"], _speed(speed)) if w else None
+    if not w:
+        return None, state
+    state["turn"] = "model"
+    return model_audio(w["word"], state["lang"], _speed(speed), voice), state
+
+
+def word_title(w, turn: str) -> str:
+    listener = f"  <span class='hint'>listener confidence {w['listener']:.0%}</span>" if w.get("listener") is not None else ""
+    now = "▶ you" if turn == "you" else "▶ the model"
+    nxt = "the model" if turn == "you" else "yourself"
+    return f"### {w['word']} — {w['band']} · {now}{listener}\n<span class='hint'>Tap *{w['word']}* again to hear {nxt}.</span>"
 
 
 # --- taps ------------------------------------------------------------------------
@@ -391,25 +416,30 @@ def _index(evt: gr.SelectData) -> int | None:
     return evt.index if isinstance(evt.index, int) else evt.index[0]
 
 
-def pick_word(evt: gr.SelectData, state, speed):
-    """Tap a word: open its panel and immediately play how it was said."""
+def pick_word(evt: gr.SelectData, state, speed, voice):
+    """Tap a word: open its panel and play how it was said; tap the same word again and the
+    model says it; again, you; and so on - the quickest way to hear the difference."""
     idx = _index(evt)
     nothing = (gr.update(), gr.update(), gr.update(), gr.update(), state, gr.update(), gr.update(), gr.update())
     if not state or idx is None or idx >= len(state["word_index"]) or state["word_index"][idx] is None:
         return nothing
     i = state["word_index"][idx]
     w = state["words"][i]
-    state["current"] = i
-    title = f"### {w['word']} — {w['band']}" + (f"  <span class='hint'>listener confidence {w['listener']:.0%}</span>" if w.get("listener") is not None else "")
+    if state.get("current") == i and state.get("turn") == "you":
+        turn = "model"
+    else:
+        turn = "you"  # a new word always starts with what you said
+    state["current"], state["turn"] = i, turn
     body = "\n".join(f"- {t}" for t in w["tips"]) if w["tips"] else "This word sounded clear."
     body += f"\n\n<span class='hint'>expected /{' '.join(w['expected'])}/ · heard /{' '.join(w['heard'])}/</span>"
     guides = w.get("guides") or []
     labels = [g["label"] for g in guides]
+    playing = _word_clip(state, w, speed) if turn == "you" else model_audio(w["word"], state["lang"], _speed(speed), voice)
     return (
         gr.update(visible=True),
-        title,
+        word_title(w, turn),
         body,
-        _word_clip(state, w, speed),
+        playing,
         state,
         gr.update(visible=bool(guides)),
         gr.update(choices=labels, value=labels[0] if labels else None),
@@ -457,24 +487,27 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
             note = gr.Markdown()
         with gr.Column(scale=3):
             words_hl = gr.HighlightedText(
-                label="Tap a word to hear it",
+                label="Tap a word to hear it - tap it again and the model says it",
                 color_map=BAND_COLOR,
                 show_legend=True,
                 show_inline_category=False,
                 elem_id="sentence",
             )
-            speed = gr.Slider(
-                SPEED_MIN, SPEED_MAX, value=SPEED_DEFAULT, step=SPEED_STEP,
-                label="Playback speed (you and the model)",
-                info="1 = as spoken. Around 0.7 is good for hearing the sounds in a word.",
-            )
+            with gr.Row():
+                speed = gr.Slider(
+                    SPEED_MIN, SPEED_MAX, value=SPEED_DEFAULT, step=SPEED_STEP,
+                    label="Playback speed (you and the model)",
+                    info="1 = as spoken. Around 0.7 is good for hearing the sounds in a word.",
+                    scale=3,
+                )
+                voice = gr.Radio(VOICE_CHOICES, value=DEFAULT_VOICE, label="Model voice", scale=1)
             with gr.Row():
                 btn_you = gr.Button("▶ You")
                 btn_model = gr.Button("▶ Model")
             player = gr.Audio(label="Now playing", autoplay=True, interactive=False, elem_id="player")
 
     with gr.Group(visible=False) as word_panel:
-        word_title = gr.Markdown()
+        word_head = gr.Markdown()
         with gr.Row():
             btn_word_you = gr.Button("▶ You said this word")
             btn_word_model = gr.Button("▶ Model says this word")
@@ -508,14 +541,14 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
         [audio, text, accent, l1],
         [card, note, words_hl, state, player, word_panel, tech_text, timeline, ipa_hl, table, plot],
     )
-    words_hl.select(pick_word, [state, speed], [word_panel, word_title, word_tips, player, state, guide_panel, sound_pick, guide_md])
+    words_hl.select(pick_word, [state, speed, voice], [word_panel, word_head, word_tips, player, state, guide_panel, sound_pick, guide_md])
     sound_pick.change(pick_sound, [sound_pick, state], [guide_md])
     btn_guide_sound.click(play_guide_sound, [sound_pick, state], [player])
     btn_guide_word.click(play_guide_word, [sound_pick, state], [player])
     btn_you.click(play_you, [state, speed], [player])
-    btn_model.click(play_model, [state, speed], [player])
-    btn_word_you.click(play_word_you, [state, speed], [player])
-    btn_word_model.click(play_word_model, [state, speed], [player])
+    btn_model.click(play_model, [state, speed, voice], [player])
+    btn_word_you.click(play_word_you, [state, speed], [player, state])
+    btn_word_model.click(play_word_model, [state, speed, voice], [player, state])
 
 if __name__ == "__main__":
     log.info(
