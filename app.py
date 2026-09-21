@@ -281,6 +281,7 @@ def run(audio, text, accent_name):
         note += "<span class='hint'>Some repeated or hesitated parts were ignored.</span>"
 
     w_spans = result.word_spans()
+    chunk_ids = {i: cid for cid, chunk in enumerate(result.chunks) for i in chunk.members}
     orig = np.asarray(samples, dtype=np.float32)
     if orig.ndim == 2:
         orig = orig.mean(axis=1)
@@ -292,18 +293,21 @@ def run(audio, text, accent_name):
         "audio": audio16k,
         "orig": (int(sr), orig),  # the recording as it came in, for playback
         "word_index": word_index,
+        "chunks": [{"text": c.text, "members": c.members,
+                    "span": (c.span.start, c.span.end) if c.span else None} for c in result.chunks],
         "words": [
             {
                 "word": w.word,
                 "band": f.band,
                 "span": (sp.start, sp.end),
+                "chunk": chunk_ids[i],
                 "listener": w.listener_p,
                 "tips": f.tips,
                 "guides": sound_guides(w),
                 "expected": [p.expected for p in w.phones],
                 "heard": [p.heard_label if not p.inserted else f"+{p.heard}" for p in w.all_phones],
             }
-            for w, f, sp in zip(result.words, feedback, w_spans)
+            for i, (w, f, sp) in enumerate(zip(result.words, feedback, w_spans))
         ],
         "current": None,
         "turn": "you",  # what the next tap on the current word plays: "you" or "model"
@@ -316,11 +320,12 @@ def run(audio, text, accent_name):
             ipa_hl.append((p.expected, p.category))
         ipa_hl.append(("  ", None))
     rows = []
-    for word, sp in zip(result.words, w_spans):
+    for wi, (word, sp) in enumerate(zip(result.words, w_spans)):
         for i, p in enumerate(word.phones):
             rows.append(
                 [
                     word.word if i == 0 else "",
+                    result.chunks[chunk_ids[wi]].text if i == 0 else "",
                     f"{sp.start:.2f}-{sp.end:.2f}" if i == 0 else "",
                     p.expected,
                     f"{p.start_s:.2f}",
@@ -337,6 +342,7 @@ def run(audio, text, accent_name):
         + (f"Heard but not in the sentence: {result.extra_text()}\n" if result.extra_text() else "")
         + (f"No model label for: {' '.join(result.unknown_phones)}\n" if result.unknown_phones else "")
         + f"Word crops: {result.span_source} · native reference: {', '.join(result.reference_voices) or 'none'}\n"
+        + "Playback: " + " | ".join(f"[{c.text}] ({c.reason})" for c in result.chunks) + "\n"
         + ("Sound guidance and clips: GAPhonetics (human US recordings; Wiktionary/Wikimedia Commons contributors, CC BY-SA 3.0 / CC0 - credits in its *-audio-sources.json)\n" if PHONETICS else "")
         + f"{result.duration_s:.1f} s of audio · {timing}"
     )
@@ -379,31 +385,53 @@ def _current(state):
 
 
 def _word_clip(state, w, speed):
+    chunk = _chunk_for(state, w)
+    if chunk["span"] is None or chunk["span"][1] <= chunk["span"][0]:
+        return None
     sr, orig = state.get("orig", (SAMPLE_RATE, state["audio"]))
-    return retimed(*clip(orig, *w["span"], sr=sr), _speed(speed))
+    return retimed(*clip(orig, *chunk["span"], sr=sr), _speed(speed))
+
+
+def _chunk_for(state, w):
+    if "chunk" in w and state.get("chunks"):
+        return state["chunks"][w["chunk"]]
+    return {"text": w["word"], "span": w["span"], "members": [state.get("current")]}
+
+
+def _word_title(state, turn):
+    w = _current(state)
+    chunk = _chunk_for(state, w)
+    phrase = " ".join(
+        f"<strong>{escape(state['words'][i]['word'])}</strong>" if i == state["current"] else escape(state["words"][i]["word"])
+        for i in chunk["members"]
+    )
+    title = word_title(w, turn, phrase)
+    if chunk["span"] is None:
+        title += "\nThis part was not heard. You can still play the model."
+    return title
 
 
 def play_word_you(state, speed):
     w = _current(state)
     if not w:
-        return None, state
+        return None, state, gr.update()
     state["turn"] = "you"  # the next tap on the word plays the model
-    return _word_clip(state, w, speed), state
+    return _word_clip(state, w, speed), state, _word_title(state, "you")
 
 
 def play_word_model(state, speed, voice):
     w = _current(state)
     if not w:
-        return None, state
+        return None, state, gr.update()
     state["turn"] = "model"
-    return model_audio(w["word"], state["lang"], _speed(speed), voice), state
+    return model_audio(_chunk_for(state, w)["text"], state["lang"], _speed(speed), voice), state, _word_title(state, "model")
 
 
-def word_title(w, turn: str) -> str:
+def word_title(w, turn: str, phrase: str | None = None) -> str:
     listener = f"  <span class='hint'>listener confidence {w['listener']:.0%}</span>" if w.get("listener") is not None else ""
     now = "▶ you" if turn == "you" else "▶ the model"
     nxt = "the model" if turn == "you" else "yourself"
-    return f"### {w['word']} — {w['band']} · {now}{listener}\n<span class='hint'>Tap *{w['word']}* again to hear {nxt}.</span>"
+    return f"### {phrase or escape(w['word'])}\n**{w['word']}** — {w['band']} · {now}{listener}\n<span class='hint'>Tap again to hear {nxt}.</span>"
 
 
 # --- taps ------------------------------------------------------------------------
@@ -416,27 +444,28 @@ def _index(evt: gr.SelectData) -> int | None:
 
 
 def pick_word(evt: gr.SelectData, state, speed, voice):
-    """Tap a word: open its panel and play how it was said; tap the same word again and the
-    model says it; again, you; and so on - the quickest way to hear the difference."""
+    """Select word-specific feedback, alternating learner/model audio within its pair."""
     idx = _index(evt)
     nothing = (gr.update(), gr.update(), gr.update(), gr.update(), state, gr.update(), gr.update(), gr.update())
-    if not state or idx is None or idx >= len(state["word_index"]) or state["word_index"][idx] is None:
+    if not state or idx is None or idx < 0 or idx >= len(state["word_index"]) or state["word_index"][idx] is None:
         return nothing
     i = state["word_index"][idx]
     w = state["words"][i]
-    if state.get("current") == i and state.get("turn") == "you":
+    previous = _current(state)
+    same_chunk = previous is not None and previous.get("chunk", state["current"]) == w.get("chunk", i)
+    if same_chunk and state.get("turn") == "you":
         turn = "model"
     else:
-        turn = "you"  # a new word always starts with what you said
+        turn = "you"  # a new playback pair starts with what you said
     state["current"], state["turn"] = i, turn
     body = "\n".join(f"- {t}" for t in w["tips"]) if w["tips"] else "This word sounded clear."
     body += f"\n\n<span class='hint'>expected /{' '.join(w['expected'])}/ · heard /{' '.join(w['heard'])}/</span>"
     guides = w.get("guides") or []
     labels = [g["label"] for g in guides]
-    playing = _word_clip(state, w, speed) if turn == "you" else model_audio(w["word"], state["lang"], _speed(speed), voice)
+    playing = _word_clip(state, w, speed) if turn == "you" else model_audio(_chunk_for(state, w)["text"], state["lang"], _speed(speed), voice)
     return (
         gr.update(visible=True),
-        word_title(w, turn),
+        _word_title(state, turn),
         body,
         playing,
         state,
@@ -483,7 +512,7 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
             note = gr.Markdown()
         with gr.Column(scale=3):
             words_hl = gr.HighlightedText(
-                label="Tap a word to hear it - tap it again and the model says it",
+                label="Tap a word to hear it with a linked word when useful; tap again for the model",
                 color_map=BAND_COLOR,
                 show_legend=True,
                 show_inline_category=False,
@@ -502,8 +531,8 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
     with gr.Group(visible=False) as word_panel:
         word_head = gr.Markdown()
         with gr.Row():
-            btn_word_you = gr.Button("▶ You said this word")
-            btn_word_model = gr.Button("▶ Model says this word")
+            btn_word_you = gr.Button("▶ You said this")
+            btn_word_model = gr.Button("▶ Model says this")
         word_tips = gr.Markdown()
         with gr.Group(visible=False) as guide_panel:
             gr.Markdown("#### How to make it")
@@ -528,7 +557,7 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
             show_legend=True,
         )
         table = gr.Dataframe(
-            headers=["word", "word crop (s)", "phone", "spike (s)", "GOP", "posterior", "heard", "top-3 candidates"],
+            headers=["word", "playback", "word crop (s)", "phone", "spike (s)", "GOP", "posterior", "heard", "top-3 candidates"],
             label="Per-phone detail",
             wrap=True,
         )
@@ -546,8 +575,8 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
     btn_guide_word.click(play_guide_word, [sound_pick, state], [player])
     btn_you.click(play_you, [state, speed], [player])
     btn_model.click(play_model, [state, speed, voice], [player])
-    btn_word_you.click(play_word_you, [state, speed], [player, state])
-    btn_word_model.click(play_word_model, [state, speed, voice], [player, state])
+    btn_word_you.click(play_word_you, [state, speed], [player, state, word_head])
+    btn_word_model.click(play_word_model, [state, speed, voice], [player, state, word_head])
 
 if __name__ == "__main__":
     log.info(

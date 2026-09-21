@@ -15,6 +15,7 @@ from .listener import match_words
 from .audio import duration_s, to_mono_16k
 from . import SAMPLE_RATE
 from .boundaries import HOP, SPIKE_LAG_S, Span, energy_db, word_spans
+from .chunks import PlaybackChunk, build_chunks, safe_spans
 from .engine import DEFAULT_MODEL, Emissions, get_engine
 from .g2p import text_to_phones
 from .reference import acceptances, native_reference
@@ -40,6 +41,7 @@ class Assessment:
     reference_voices: list[str] = field(default_factory=list)  # native renderings the scorer listened to
     unknown_phones: list[str] = field(default_factory=list)  # expected phones the model has no label for
     timings: dict[str, float] = field(default_factory=dict)
+    chunks: list[PlaybackChunk] = field(default_factory=list)
 
     @property
     def phones(self):
@@ -150,7 +152,15 @@ def assess(
 
     t0 = time.perf_counter()
     spans, span_source, span_cases = locate_words(audio, word_phones, words, segments, extra, em.frame_ms)
+    dropped_words = [bool(w.phones) and all(p.dropped for p in w.phones) and not w.insertions for w in words]
+    spans = safe_spans(spans, duration_s(audio), dropped_words)
     timings["crop"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    chunks = build_chunks(text, [w.word for w in words], spans, audio, dropped_words,
+                          [(r.start * em.frame_ms / 1000, r.end * em.frame_ms / 1000) for r in extra],
+                          enabled=os.environ.get("PC_CHUNKS", "1") != "0")
+    timings["chunk"] = time.perf_counter() - t0
 
     return Assessment(
         text=text,
@@ -169,6 +179,7 @@ def assess(
         reference_voices=list(ref.renderings) if ref else [],
         unknown_phones=unknown,
         timings=timings,
+        chunks=chunks,
     )
 
 
@@ -345,6 +356,8 @@ def settle_starts(spans: list[Span], kept: list[list[Segment]], audio: np.ndarra
         s = segs[0].start * frame_s - SPIKE_LAG_S - ONSET_SLACK_S
         early, late = min(c, s), max(c, s)
         lo = max(0.0, early - SEARCH_BEFORE_S)
+        if i > 0:
+            lo = max(lo, kept[i - 1][0].start * frame_s)
         quiet = [t for t in ticks(lo, s) if level(t) < silent]
         if quiet:
             start, case = quiet[-1] + step, "onset"  # sound resumes here; a near-silent h is kept
@@ -357,9 +370,9 @@ def settle_starts(spans: list[Span], kept: list[list[Segment]], audio: np.ndarra
                     start, case = v, "dip"
         start = min(start, s + LATE_TOL_S)
         sp.start = min(max(start, lo, 0.0), max(late, lo))
+        sp.start = min(len(audio) / SAMPLE_RATE, max(sp.start, out[i - 1].start if i else 0.0))
         if i > 0 and out[i - 1].end > sp.start:
             out[i - 1].end = sp.start
-        if sp.end < sp.start + 0.03:
-            sp.end = sp.start + 0.03
+        sp.end = min(len(audio) / SAMPLE_RATE, max(sp.end, sp.start))
         cases.append(case)
     return out, cases

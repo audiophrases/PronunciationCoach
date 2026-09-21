@@ -98,6 +98,7 @@ def log_assessment(log: logging.Logger, result: Assessment, audio_16k: np.ndarra
     cases = result.span_cases or [""] * len(result.spans)
     log.info("crops (%s): %s", result.span_source,
              " | ".join(f"{w.word} {sp.start:.2f}-{sp.end:.2f} {case}".rstrip() for w, sp, case in zip(result.words, result.spans, cases)))
+    log.info("playback: %s", " | ".join(f"[{c.text}] {c.reason}" for c in result.chunks))
     if log.isEnabledFor(logging.DEBUG):
         for w in result.words:
             for p in w.phones:
@@ -115,10 +116,14 @@ def log_assessment(log: logging.Logger, result: Assessment, audio_16k: np.ndarra
         "transcribed": result.transcribed,
         "accent": result.lang,
         "duration_s": result.duration_s,
+        "sample_rate": SAMPLE_RATE,
+        "frame_ms": result.emissions.frame_ms,
+        "chunks": [asdict(c) for c in result.chunks],
         "heard": result.heard_text,
         "words": [
             {"word": w.word, "gop_min": w.gop_min, "span": [round(sp.start, 3), round(sp.end, 3)], "crop": case,
-             "phones": [asdict(p) for p in w.phones], "insertions": [asdict(p) for p in w.insertions]}
+             "phones": [asdict(p) for p in w.phones], "insertions": [asdict(p) for p in w.insertions],
+             "listener_p": w.listener_p, "understood": w.understood}
             for w, sp, case in zip(result.words, result.spans, result.span_cases or [""] * len(result.spans))
         ],
         "span_source": result.span_source,

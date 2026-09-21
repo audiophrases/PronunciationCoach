@@ -104,3 +104,28 @@ def test_playback_pads_extend_only_through_quiet_audio():
     audio = np.concatenate([silence(0.2), tone(0.3), tone(0.3, 0.3)])  # word 0.20-0.50, a loud neighbour right after
     _, out = clip(audio, 0.20, 0.50, SAMPLE_RATE)
     assert len(out) / SAMPLE_RATE == pytest.approx(0.30 + PAD_BEFORE_S, abs=0.006)  # silence before: yes; the neighbour: no
+
+
+def test_dip_search_keeps_a_preceding_weak_words_closure():
+    from pronunciationcoach.boundaries import Span
+    from pronunciationcoach.pipeline import settle_starts
+
+    # it / to / him: a deep t closure before the shallower h must stay with 'to'.
+    audio = np.concatenate([silence(.3), tone(.38), tone(.05, .03), tone(.05, .2),
+                            tone(.04, .05), tone(.18), silence(.5)])
+    kept = [[seg(19), seg(30, 32)], [seg(37, phone="t"), seg(40)],
+            [seg(43, phone="h"), seg(45), seg(49, phone="m")]]
+    result, cases = settle_starts([Span(.3, .66), Span(.66, .8), Span(.8, 1)], kept, audio, .02)
+    assert cases[2] == "dip" and .77 <= result[2].start <= .79
+    assert result[1].duration >= .10
+    assert all(0 <= s.start <= s.end <= len(audio) / SAMPLE_RATE for s in result)
+
+
+def test_settled_crops_cannot_reverse_the_previous_word_or_exceed_audio():
+    from pronunciationcoach.boundaries import Span
+    from pronunciationcoach.pipeline import settle_starts
+
+    audio = np.concatenate([silence(.2), tone(.2)])
+    result, _ = settle_starts([Span(.2, .5), Span(.2, 3)], [[seg(14)], [seg(15)]], audio, .02)
+    assert all(0 <= s.start <= s.end <= .4 for s in result)
+    assert result[0].end <= result[1].start

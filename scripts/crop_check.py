@@ -17,6 +17,7 @@ checked as they are, without loading any model; older ones are re-assessed.
     uv run python scripts/crop_check.py                 # all archived recordings
     uv run python scripts/crop_check.py --only 2026-09-21 --verbose
     uv run python scripts/crop_check.py --rerun          # re-assess everything with the current code
+    uv run python scripts/crop_check.py --rechunk        # audit playback pairs without models
 """
 
 from __future__ import annotations
@@ -62,7 +63,44 @@ def from_assessment(audio: np.ndarray, meta: dict):
     for w, segs in zip(r.words, r.segments_by_word()):
         kept = [(em.frame_to_s(s.start), em.frame_to_s(s.end)) for p, s in zip(w.phones, segs) if not p.dropped]
         words.append((w.word, kept or [(em.frame_to_s(s.start), em.frame_to_s(s.end)) for s in segs]))
-    return words, [(sp.start, sp.end) for sp in r.word_spans()], r.span_cases or [""] * len(words), r.span_source
+    return words, [(sp.start, sp.end) for sp in r.word_spans()], r.span_cases or [""] * len(words), r.span_source, r
+
+
+def audit_chunks(audio, meta, words, spans, assessment=None):
+    from pronunciationcoach import SAMPLE_RATE
+    from pronunciationcoach.boundaries import Span
+    from pronunciationcoach.chunks import FUNCTION_WORDS, SHORT_S, build_chunks
+
+    if assessment is not None:
+        chunks = assessment.chunks
+        extra = [(r.start * assessment.emissions.frame_ms / 1000, r.end * assessment.emissions.frame_ms / 1000)
+                 for r in assessment.extra]
+    else:
+        frame_s = meta.get("frame_ms", 20.0) / 1000
+        extra = [(a * frame_s, b * frame_s) for _, a, b in meta.get("extra", [])]
+        dropped = [bool(w["phones"]) and all(p.get("dropped", False) for p in w["phones"]) and not w.get("insertions")
+                   for w in meta["words"]]
+        chunks = build_chunks(meta["text"], [w[0] for w in words], [Span(*s) for s in spans], audio, dropped, extra)
+    print("   PLAYBACK (at most two words per chunk):")
+    orphan = overlaps = 0
+    previous_end = 0.0
+    for chunk in chunks:
+        sp = chunk.span
+        timing = f"{sp.start:.2f}-{sp.end:.2f} ({sp.duration * 1000:.0f} ms)" if sp else "not heard"
+        flags = []
+        if sp and (sp.start < previous_end - 1e-8 or any(a < sp.end and b > sp.start for a, b in extra)):
+            flags.append("overlap: inspect")
+            overlaps += 1
+        if sp:
+            previous_end = sp.end
+        if len(chunk.members) == 1 and (not sp or sp.duration < SHORT_S - 1e-8 or words[chunk.members[0]][0].lower() in FUNCTION_WORDS):
+            orphan += 1  # not automatically wrong: barriers/emphasis can require a singleton
+        print(f"     [{chunk.text}] {timing} | {chunk.reason}" + (" | " + ", ".join(flags) if flags else ""))
+    invalid = sum(not np.isfinite([a, b]).all() or a < 0 or b < a or b > len(audio) / SAMPLE_RATE + 1e-8 for a, b in spans)
+    print(f"   {len(chunks)} chunks | weak/short singletons {orphan} | invalid input crops {invalid} | overlaps {overlaps}")
+    if meta.get("chunks") is not None:
+        changed = [c.members for c in chunks] != [c["members"] for c in meta["chunks"]]
+        print(f"   Membership changed from archive: {changed}")
 
 
 def main() -> None:
@@ -70,6 +108,7 @@ def main() -> None:
     ap.add_argument("--only", help="substring of the recording name")
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--rerun", action="store_true", help="re-assess with the current code even when crops are archived")
+    ap.add_argument("--rechunk", action="store_true", help="audit current playback pairs from archived audio and word crops")
     args = ap.parse_args()
 
     from pronunciationcoach.audio import load_audio
@@ -88,7 +127,11 @@ def main() -> None:
         seen_texts.add(meta["text"])
         audio = load_audio(wav)
         archived = all("span" in w for w in meta["words"]) and not args.rerun
-        words, spans, cases, source = from_archive(meta) if archived else from_assessment(audio, meta)
+        if archived:
+            words, spans, cases, source = from_archive(meta)
+            assessment = None
+        else:
+            words, spans, cases, source, assessment = from_assessment(audio, meta)
         thr = speech_threshold(energy_db(audio))
         print(f"\n== {meta_path.stem}  ({source}{', archived' if archived else ', re-assessed'})  {meta['text'][:60]!r}")
         print(f"   {'word':<10} {'crop':<12} {'case':<5} {'cut':>4} {'prev':>4} {'next':>4} {'tail':>4} {'lead':>5} {'trail':>5}")
@@ -105,6 +148,8 @@ def main() -> None:
             flag = "" if cut <= OK_CUT_MS and prev <= OK_PREV_MS and nxt <= OK_NEXT_MS and tail <= OK_TAIL_MS and lead < 80 and trail < 120 else "  <--"
             if args.verbose or flag:
                 print(f"   {word:<10} {a:5.2f}-{b:5.2f} {case:<5} {cut:4.0f} {prev:4.0f} {nxt:4.0f} {tail:4.0f} {lead:5.0f} {trail:5.0f}{flag}")
+        if args.rechunk:
+            audit_chunks(audio, meta, words, spans, assessment)
     if rows:
         t = np.array(rows)
         n = len(t)

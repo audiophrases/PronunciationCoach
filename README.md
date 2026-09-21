@@ -28,8 +28,9 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
 
 * **Learner view** – a score ring, the sentence as tappable word chips (clear / accent / almost /
   work on this), one player that speaks whatever you tap, with a line of plain-language advice per
-  sound that needs work. Tapping a word plays what *you* said; tapping the same word again plays the
-  model saying it; again, you - and so on, the quickest way to hear a difference. The whole sentence
+  sound that needs work. Tapping a word plays what *you* said, with a linked word when useful;
+  tapping within the same playback pair again plays the model; again, you, and so on.
+  The heading shows the pair and emphasizes the selected word; colors and tips stay per word. The whole sentence
   has its own ▶ You / ▶ Model buttons. One speed slider (0.5-1.5 in steps of 0.05) applies to everything
   played, so you and the model are always compared at the same pace: the model voice is synthesised at
   that rate, your own audio is time-stretched with the pitch kept (ffmpeg atempo). The model voice can
@@ -53,12 +54,29 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   never later than the spike allows). Each decision is logged (`crops (charsiu): can 0.59-0.88
   onset | ...`) and archived with the recording. `scripts/crop_check.py` audits archived recordings
   without loading any model: per word, ms of the first sound cut, of the previous/next word
-  included, of the last sound cut, and edge silence. Against Edge TTS word boundaries the raw
-  Charsiu crops are within ~17 / ~23 ms (`scripts/calibrate_spikes.py`). If Charsiu is unavailable
+  included, of the last sound cut, and edge silence. Using Edge TTS word-boundary
+  timing metadata, `scripts/calibrate_spikes.py` measures synthetic crop differences; these are not
+  human-annotated learner-speech accuracy measurements. If Charsiu is unavailable
   the spike-based estimate in `boundaries.py` is used instead.
   Playback clips take the recording at its original rate and add up to 60/50 ms of room on either
   side **only through quiet audio** (silence, a closure, breath - never a neighbour's vowel), with
   10 ms fades and a level boost, then follow the speed slider.
+  The start search cannot reach before the preceding word's first kept spike; adjusting a shared
+  boundary cannot reverse that word's crop. A final logged safety check keeps live spans ordered
+  and inside the recording, without inventing audio for missing words.
+* **Short playback pairs** – function words (articles, prepositions, pronouns, conjunctions and
+  helping verbs) are candidates for context: **[can you] [hear me]**, **[the store]**, **[to school]**.
+  Chunks contain at most **two words**, never a chain of pairs. Content words generally stay alone.
+  Neighboring pair choices favor grammatical attachment; main-verb *have/do* are not automatically
+  treated as unstressed. Duration and relative loudness provide a conservative emphasis heuristic,
+  not a linguistic stress detector. Crops under 120 ms can also receive context. Punctuation,
+  pauses/gaps of at least 100 ms and intervening extra speech block a pair; a pair longer than 1.5 s
+  is not formed. A barrier or cap may leave a short word alone. Missing words add no parked audio,
+  and an entirely missing chunk offers only model playback. Both voices play the same word/pair
+  text, using the existing speed control. The technical table and recording archive include
+  membership and reasons. `scripts/crop_check.py --rechunk` audits archived recordings without
+  model inference (old archives assume 20 ms scoring frames). Set `PC_CHUNKS=0` to compare with
+  individual-word playback; no new model or dependency is needed.
 * **Speech, not dictionary words** – three things stop natural, connected speech from being
   penalised. (1) *Native reference by example*: the sentence is synthesised with two natural
   voices and run through our own recogniser, and whatever it hears a native do in that position
