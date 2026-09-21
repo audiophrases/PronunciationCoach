@@ -15,17 +15,17 @@ import numpy as np
 
 from . import SAMPLE_RATE
 from .asr import HeardWord, transcribe_crop
-from .boundaries import Span
+from .boundaries import SPIKE_LAG_S, Span
 from .chunks import PlaybackChunk
 from .crop_recheck import CropEvidence
 from .playback import clip, sample_bounds
+from .listener import HESITANT_P, UNDERSTOOD_P
 
 MAX_CROPS = 8
 MAX_CLIP_S = 3.0
 MIN_CLIP_S = .06
 EDGE_SLACK_S = .02
 CONTEXT_TOL_S = .18  # Whisper timestamps are supporting evidence, not sample-accurate cuts.
-EXTRA_P = .6
 
 
 @dataclass
@@ -85,24 +85,32 @@ def _context_match(observed: list[HeardWord], context: list[HeardWord], offset: 
             continue
         a, b = observed[start], observed[start+count-1]
         c, d = run[start], run[start+count-1]
+        extra_indices = list(range(start)) + list(range(start+count, len(observed)))
+        # A real neighboring word outside the clip cannot corroborate a
+        # hallucinated copy of that word inside it. Require acoustic overlap.
+        if any(min(offset+observed[k].end, run[k].end) - max(offset+observed[k].start, run[k].start)
+               < min(.02, (observed[k].end-observed[k].start)/2, (run[k].end-run[k].start)/2)
+               for k in extra_indices):
+            continue
         if (abs(offset + a.start - c.start) <= CONTEXT_TOL_S
                 and abs(offset + b.end - d.end) <= CONTEXT_TOL_S):
             candidates.append(run)
     return candidates[0] if len(candidates) == 1 else None
 
 
-def _contains_target(candidate: Span, chunk: PlaybackChunk, evidence: CropEvidence | None) -> bool:
-    if evidence is None:
-        return True
+def _contains_target(candidate: Span, chunk: PlaybackChunk, anchors: list[Span] | None) -> bool:
+    if anchors is None:
+        return False
     first, last = chunk.members[0], chunk.members[-1]
     # Retain the scoring model's first/last kept phone spikes. They need not
     # locate the exact boundary, but trimming past them could erase a sound.
-    a, b = evidence.spikes[first], evidence.spikes[last]
-    return candidate.start <= a.start - .02 and candidate.end >= b.end - .02
+    a, b = anchors[first], anchors[last]
+    return candidate.start <= max(0., a.start - SPIKE_LAG_S) + 1e-8 and candidate.end >= b.end - 1e-8
 
 
 def verify_chunks(chunks: list[PlaybackChunk], audio: np.ndarray, heard_words: list[HeardWord],
                   *, evidence: CropEvidence | None = None, suspicious: set[int] | None = None,
+                  anchors: list[Span] | None = None,
                   protected: set[int] | None = None, apply: bool = True,
                   recognize: Callable = transcribe_crop) -> tuple[list[PlaybackChunk], list[TranscriptCheck]]:
     """Bounded detect/trim/recheck loop over rendered clips; failures preserve playback.
@@ -114,6 +122,7 @@ def verify_chunks(chunks: list[PlaybackChunk], audio: np.ndarray, heard_words: l
     """
     result = [replace(c, span=replace(c.span) if c.span else None) for c in chunks]
     context = _words(heard_words)
+    anchors = anchors if anchors is not None else evidence.spikes if evidence is not None else None
     priority = set(suspicious or ())
     protected = protected or set()
     for ci, chunk in enumerate(chunks):
@@ -181,14 +190,14 @@ def verify_chunks(chunks: list[PlaybackChunk], audio: np.ndarray, heard_words: l
             start, count = positions[0], len(expected)
             stop = start + count
             extras = observed[:start] + observed[stop:]
-            if not extras or len(extras) > 3 or any(w.probability < EXTRA_P for w in extras):
+            if not extras or len(extras) > 3 or any(w.probability < HESITANT_P for w in extras):
                 check.detail = "extra edge words are not clear enough"
                 continue
             corroborated = _context_match(observed, context, a/SAMPLE_RATE, start, count)
             if corroborated is None:
                 check.detail = "extra words not corroborated at this position in the sentence"
                 continue
-            if any(w.probability < EXTRA_P for w in corroborated[:start] + corroborated[stop:]):
+            if any(w.probability < UNDERSTOOD_P for w in corroborated[:start] + corroborated[stop:]):
                 check.detail = "surrounding recognition is uncertain about the extra words"
                 continue
             # Two estimates: crop timestamps and full-sentence timestamps. Each
@@ -206,7 +215,7 @@ def verify_chunks(chunks: list[PlaybackChunk], audio: np.ndarray, heard_words: l
                     continue
                 seen.add(key)
                 if (candidate.duration < MIN_CLIP_S or candidate.duration < original.duration*.2
-                        or not _contains_target(candidate, chunk, evidence)):
+                        or not _contains_target(candidate, chunk, anchors)):
                     check.detail = "proposed trim would remove target sounds"
                     continue
                 if candidate == original and before_pad == chunk.pad_before and after_pad == chunk.pad_after:

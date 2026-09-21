@@ -178,8 +178,15 @@ def assess(
         chunks, crop_checks = recheck_chunks(chunks, crop_evidence[0], duration_s(audio), dropped_words,
                                             apply=False)
     if recheck_mode != "0" and heard_words is not None:
+        # Scoring anchors survive a missing Charsiu model. Cropping must not
+        # remove the target's kept phone spikes just to satisfy an ASR transcript.
+        anchors = []
+        for w, sp in zip(words, spans):
+            kept_phones = [p for p in w.phones if not p.dropped]
+            anchors.append(Span(kept_phones[0].start_s, kept_phones[-1].end_s) if kept_phones else sp)
         chunks, transcript_checks = verify_chunks(
             chunks, audio, heard_words, evidence=crop_evidence[0] if crop_evidence else None,
+            anchors=anchors,
             suspicious={c.chunk for c in crop_checks},
             protected={i for i, w in enumerate(words) if dropped_words[i] or w.insertions},
             apply=recheck_mode != "audit")

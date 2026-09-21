@@ -51,6 +51,12 @@ def context():
     return heard(("If", .2, .34), ("I", .38, .78), ("want", .95, 1.3))
 
 
+@pytest.fixture
+def anchors():
+    # Scoring spikes lag the audible onset and occur inside each spoken word.
+    return [Span(.28, .32), Span(.48, .76), Span(1.03, 1.26)]
+
+
 def leading_extra():
     return "If I", heard(("If", .0, .14), ("I", .18, .58))
 
@@ -59,9 +65,9 @@ def corrected_i():
     return "I", heard(("I", .02, .42))
 
 
-def test_detect_trim_and_recheck_i_from_if_i(audio, target, context):
+def test_detect_trim_and_recheck_i_from_if_i(audio, target, context, anchors):
     recognizer = Recognizer(leading_extra(), corrected_i())
-    result, checks = verify_chunks([target], audio, context, recognize=recognizer)
+    result, checks = verify_chunks([target], audio, context, anchors=anchors, recognize=recognizer)
 
     assert result[0].span.start == pytest.approx(.36)
     assert result[0].span.end == .9
@@ -87,7 +93,8 @@ def test_both_leading_and_trailing_extras_disable_both_pads(audio):
         ("if I want", heard(("if", .02, .2), ("I", .24, .66), ("want", .7, 1.0))),
         ("I", heard(("I", .02, .44))),
     )
-    result, checks = verify_chunks([target], audio, context, recognize=recognizer)
+    anchors = [Span(.3, .38), Span(.52, .84), Span(.98, 1.18)]
+    result, checks = verify_chunks([target], audio, context, anchors=anchors, recognize=recognizer)
     assert checks[0].status == "trimmed"
     assert result[0].span.start == pytest.approx(.42)
     assert result[0].span.end == pytest.approx(.88)
@@ -101,7 +108,8 @@ def test_trailing_extra_preserves_original_before_padding(audio):
         ("I want", heard(("I", .02, .42), ("want", .46, .74))),
         ("I", heard(("I", .02, .42))),
     )
-    result, checks = verify_chunks([target], audio, context, recognize=recognizer)
+    anchors = [Span(.30, .60), Span(.74, .92)]
+    result, checks = verify_chunks([target], audio, context, anchors=anchors, recognize=recognizer)
     assert checks[0].status == "trimmed"
     assert result[0].span.start == .2
     assert result[0].span.end == pytest.approx(.64)
@@ -117,9 +125,9 @@ def test_exact_match_leaves_crop_unchanged_without_context(audio, target):
     assert len(recognizer.clips) == 1
 
 
-def test_audit_returns_verified_proposal_without_changing_playback(audio, target, context):
+def test_audit_returns_verified_proposal_without_changing_playback(audio, target, context, anchors):
     recognizer = Recognizer(leading_extra(), corrected_i())
-    result, checks = verify_chunks([target], audio, context, apply=False, recognize=recognizer)
+    result, checks = verify_chunks([target], audio, context, anchors=anchors, apply=False, recognize=recognizer)
     assert result == [target]
     assert result[0].pad_before is result[0].pad_after is True
     assert checks[0].status == "proposed"
@@ -169,9 +177,9 @@ def test_extra_requires_full_sentence_corroboration_at_same_position(audio, targ
     assert len(recognizer.clips) == 1
 
 
-def test_failed_recheck_keeps_original_crop_and_padding(audio, target, context):
+def test_failed_recheck_keeps_original_crop_and_padding(audio, target, context, anchors):
     recognizer = Recognizer(leading_extra(), ("I want", heard(("I", .02, .23), ("want", .25, .46))))
-    result, checks = verify_chunks([target], audio, context, recognize=recognizer)
+    result, checks = verify_chunks([target], audio, context, anchors=anchors, recognize=recognizer)
     assert result == [target]
     assert checks[0].status == "uncertain"
     assert "did not recheck" in checks[0].detail
@@ -180,14 +188,14 @@ def test_failed_recheck_keeps_original_crop_and_padding(audio, target, context):
     assert len(recognizer.clips) == 2
 
 
-def test_sentence_estimate_gets_its_own_recheck_if_crop_estimate_still_has_extra(audio, target):
+def test_sentence_estimate_gets_its_own_recheck_if_crop_estimate_still_has_extra(audio, target, anchors):
     context = heard(("if", .24, .38), ("I", .42, .82))
     recognizer = Recognizer(
         leading_extra(),
         ("if I", heard(("if", .0, .04), ("I", .06, .46))),
         corrected_i(),
     )
-    result, checks = verify_chunks([target], audio, context, recognize=recognizer)
+    result, checks = verify_chunks([target], audio, context, anchors=anchors, recognize=recognizer)
     assert checks[0].status == "trimmed"
     assert result[0].span.start == pytest.approx(.4)
     assert len(checks[0].attempts) == 2
@@ -196,9 +204,9 @@ def test_sentence_estimate_gets_its_own_recheck_if_crop_estimate_still_has_extra
     assert len(recognizer.clips) == 3
 
 
-def test_exact_recheck_text_with_zero_duration_target_does_not_authorize_trim(audio, target, context):
+def test_exact_recheck_text_with_zero_duration_target_does_not_authorize_trim(audio, target, context, anchors):
     recognizer = Recognizer(leading_extra(), ("I", heard(("I", .0, .0, .99))))
-    result, checks = verify_chunks([target], audio, context, recognize=recognizer)
+    result, checks = verify_chunks([target], audio, context, anchors=anchors, recognize=recognizer)
     assert result == [target]
     assert checks[0].status == "uncertain"
     assert "unusable timestamps" in checks[0].detail
@@ -227,12 +235,64 @@ def test_preserves_last_phone_anchor_when_trailing_word_is_recognized(audio):
 
 
 def test_supported_trim_preserves_first_and_last_phone_anchors(audio, target, context):
-    evidence = SimpleNamespace(spikes=[Span(.22, .3), Span(.44, .76)])
+    evidence = SimpleNamespace(spikes=[Span(.22, .3), Span(.48, .76)])
     recognizer = Recognizer(leading_extra(), corrected_i())
     result, checks = verify_chunks([target], audio, context, evidence=evidence, recognize=recognizer)
     assert checks[0].status == "trimmed"
-    assert result[0].span.start <= evidence.spikes[1].start - .02
-    assert result[0].span.end >= evidence.spikes[1].end - .02
+    assert result[0].span.start <= evidence.spikes[1].start - .08
+    assert result[0].span.end >= evidence.spikes[1].end
+
+
+def test_transcript_match_without_phone_anchors_cannot_authorize_trim(audio, target, context):
+    recognizer = Recognizer(leading_extra())
+    result, checks = verify_chunks([target], audio, context, recognize=recognizer)
+    assert result == [target]
+    assert checks[0].status == "uncertain"
+    assert len(recognizer.clips) == 1
+
+
+def test_context_extra_entirely_outside_crop_cannot_corroborate_it(audio, target, anchors):
+    context = heard(("If", .0, .10), ("I", .38, .78), ("want", .95, 1.3))
+    recognizer = Recognizer(leading_extra())
+    result, checks = verify_chunks([target], audio, context, anchors=anchors, recognize=recognizer)
+    assert result == [target]
+    assert checks[0].status == "uncertain"
+    assert "not corroborated" in checks[0].detail
+    assert len(recognizer.clips) == 1
+
+
+def test_trim_cannot_delete_last_twenty_ms_of_scoring_spike(audio):
+    target = PlaybackChunk([0], "I", Span(.2, 1), "single word")
+    context = heard(("I", .22, .62), ("want", .66, .94))
+    # Proposed crop ends at .64 s, just before the .65 s spike end. Even
+    # this small deletion must not be authorized by a convenient transcript.
+    anchors = [Span(.30, .65), Span(.74, .92)]
+    recognizer = Recognizer(("I want", heard(("I", .02, .42), ("want", .46, .74))))
+    result, checks = verify_chunks([target], audio, context, anchors=anchors, recognize=recognizer)
+    assert result == [target]
+    assert checks[0].status == "uncertain"
+    assert "remove target sounds" in checks[0].detail
+    assert len(recognizer.clips) == 1
+
+
+def test_hesitant_crop_extra_can_be_confirmed_by_clear_sentence_recognition(audio, target, context, anchors):
+    recognizer = Recognizer(
+        ("If I", heard(("If", .0, .14, .4), ("I", .18, .58))),
+        corrected_i(),
+    )
+    result, checks = verify_chunks([target], audio, context, anchors=anchors, recognize=recognizer)
+    assert checks[0].status == "trimmed"
+    assert result[0].span.start == pytest.approx(.36)
+
+
+def test_uncertain_sentence_extra_cannot_confirm_crop_extra(audio, target, anchors):
+    context = heard(("If", .2, .34, .4), ("I", .38, .78), ("want", .95, 1.3))
+    recognizer = Recognizer(leading_extra())
+    result, checks = verify_chunks([target], audio, context, anchors=anchors, recognize=recognizer)
+    assert result == [target]
+    assert checks[0].status == "uncertain"
+    assert "surrounding recognition is uncertain" in checks[0].detail
+    assert len(recognizer.clips) == 1
 
 
 def test_protected_pronunciation_is_skipped(audio, target, context):

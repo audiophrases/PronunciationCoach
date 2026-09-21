@@ -82,21 +82,31 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   membership and reasons. `scripts/crop_check.py --rechunk` audits archived recordings without
   model inference (old archives assume 20 ms scoring frames). Set `PC_CHUNKS=0` to compare with
   individual-word playback; no new model or dependency is needed.
-* **Second-pass crop checks** – suspicious playback edges are re-aligned with one and then two
-  neighboring words, using the existing full-recording Charsiu output and slightly relaxed
-  search windows. No additional model or neural inference is needed. Short crops, disagreeing
-  onset estimates, possible clipped tails and nearby extra speech trigger a check. At most eight
-  regions are checked per assessment, with at most eight seconds of surrounding speech per search.
-  The default, `PC_CROP_RECHECK=audit`, records proposals and uncertainty in the technical details,
-  logs and recording JSON; playback stays unchanged. `PC_CROP_RECHECK=0` disables the check.
-  Experimental `PC_CROP_RECHECK=1` permits only 20–80 ms outward extensions supported by both
-  searches and the edge phone's frame probabilities, inside unclaimed audio. Repetitions,
-  missing context, ambiguous joins and failed searches retain the original crop. It never trims
-  a quiet onset or changes word scores/group membership. This is a consistency check using the
-  same model, not an independent guarantee that a crop sounds right. Initial testing on seven
-  synthetic examples and one learner recording accepted no changes, so automatic adjustments
-  remain off. `scripts/recheck_compare.py` produces before/after JSON and a local listening page
-  from saved examples; TTS metadata comparisons are proxies, not human listening judgments.
+* **Detect, trim, recheck** – the existing Whisper listener now hears rendered playback crops
+  and compares them with the intended group text. For example, a crop intended as **I** that
+  contains a timed **if I** can lose the extra **if**. The extra words must also be recognized
+  at the same position in the full recording, with overlapping acoustic intervals. A proposed
+  trim must retain the target's scoring-model phone anchors, and the adjusted playback must
+  transcribe as exactly the intended words before the change is accepted. The target text is
+  never supplied as an ASR prompt. Substitutions, internal extras, omissions and ambiguous repeats
+  are kept for pronunciation feedback. Zero-duration invented words cannot justify a trim.
+  Cropped extras use the listener's existing hesitant threshold (0.3); sentence-level corroboration
+  requires its understood threshold (0.6). Isolated target-word confidence is recorded rather than
+  treated as a calibrated correctness score.
+  Corrections are enabled by default (`PC_CROP_RECHECK=1`); `audit` records proposals without
+  applying them, and `0` disables both checks. The earlier Charsiu search now provides diagnostic
+  evidence only. No new models or dependencies are added, but extra recognizer calls add latency.
+  At most eight crops of up to three seconds are checked, prioritizing suspect boundaries, with at
+  most two trim/recheck attempts each. Isolated decoding has a 32-token output cap and no temperature
+  retries. Missing listener results or failed checks preserve existing playback; `PC_LISTENER=0`
+  disables recognition-based correction in known-text mode. Scoring anchors remain available if
+  Charsiu fails. Corrected edges disable playback padding so removed speech cannot return, while
+  scores, original word spans, grouping, accent, voice and speed controls remain unchanged.
+  Technical details, logs and recording JSON record before/after transcripts, probabilities,
+  boundaries and rejected attempts. `scripts/recheck_compare.py` runs cached-model comparisons
+  and creates a listening page; `--alignment-only` repeats the earlier alignment-only experiment.
+  Recognition matches are not a human listening evaluation, and TTS timestamps remain metadata
+  proxies rather than acoustic ground truth.
 * **Speech, not dictionary words** – three things stop natural, connected speech from being
   penalised. (1) *Native reference by example*: the sentence is synthesised with two natural
   voices and run through our own recogniser, and whatever it hears a native do in that position
