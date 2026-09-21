@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 
-from .scoring import PRIORITY, PhoneScore, WordScore
+from .scoring import INSERTION_PRIORITY, PRIORITY, PhoneScore, WordScore
 
 # Learner-facing names for the phone-level bands, and colours for the word verdicts.
 BAND_LABEL = {"good": "clear", "unsure": "almost", "off": "work on this"}
@@ -76,6 +76,14 @@ def subject(phone: str) -> str:
     return f"The {d} sound" if d.startswith("'") else d[0].upper() + d[1:]
 
 
+def insertion_tip(p: PhoneScore, word: str, phones: list[str]) -> str:
+    if p.inserted == "before":
+        return (f"You added {describe(p.heard)} before *{word}* ('e-{word}'). Spanish and Catalan words never start "
+                f"with *s* + consonant, English words do: start straight on a long *sss* and glide into *{word}*.")
+    return (f"You added {describe(p.heard)} after *{word}* ('{word}-e'). Let {describe(phones[-1])} end the word - "
+            "no vowel after it.")
+
+
 def phone_tip(p: PhoneScore, word: str) -> str:
     if p.dropped:
         return f"{subject(p.expected)} in *{word}* was not heard - make sure you say it."
@@ -119,7 +127,8 @@ def listener_note(w: WordScore) -> str | None:
 
 
 def word_feedback(w: WordScore) -> WordFeedback:
-    tips = [phone_tip(p, w.word) for p in w.phones if p.category != "good"]
+    tips = [insertion_tip(p, w.word, [q.expected for q in w.phones]) for p in w.insertions]
+    tips += [phone_tip(p, w.word) for p in w.phones if p.category != "good"]
     tips += [natural_note(p, w.word) for p in w.phones if p.natural]
     note = listener_note(w)
     if note:
@@ -150,6 +159,10 @@ def summary(words: list[WordScore], max_items: int = 3, practise=None) -> str:
     weight: dict[str, float] = {}
     drills: dict[str, str] = {}  # a minimal pair to practise, when the caller can supply one
     for w in words:
+        for p in w.insertions:
+            key = "an added vowel before s + consonant" if p.inserted == "before" else "an added vowel after a final consonant"
+            by_sound.setdefault(key, Counter())[describe(p.heard)] += 1
+            weight[key] = max(weight.get(key, 0.0), INSERTION_PRIORITY)
         for p in w.phones:
             if p.category == "off":
                 key = describe(p.expected)
@@ -166,6 +179,8 @@ def summary(words: list[WordScore], max_items: int = 3, practise=None) -> str:
         drill = f" - practise: {drills[sound]}" if drills.get(sound) else ""
         missing = heards.pop("(not heard)", 0)
         parts = [h for h, _ in heards.most_common(2)]
+        if sound.startswith("an added vowel"):
+            return f"• {sound}: {' or '.join(parts)}{times} - English words can start on *s* + consonant and end on a consonant"
         if parts and missing:
             return f"• {sound} came out as {' or '.join(parts)}, or was missing{times}{drill}"
         if parts:

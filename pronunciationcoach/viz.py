@@ -108,6 +108,11 @@ def timeline_figure(result, max_seconds: float = 20.0):
         for ax in (ax_wave, ax_align):
             ax.axvline(span.start, color="#333", linewidth=0.8, zorder=2)
             ax.axvline(span.end, color="#333", linewidth=0.8, linestyle="--", zorder=2)
+    for w in result.words:
+        for p in w.insertions:
+            ax_align.bar((p.start_s + p.end_s) / 2 + 0.01, 0.45, width=max(p.end_s - p.start_s, 0.01), bottom=0.05,
+                         color=colors["off"], edgecolor=colors["off"], linewidth=1.2, zorder=3)
+            ax_align.text((p.start_s + p.end_s) / 2 + 0.01, 0.52, f"+{p.heard}", ha="center", va="bottom", fontsize=7, color=colors["off"])
     for run in result.extra:
         a, b = result.emissions.frame_to_s(run.start), result.emissions.frame_to_s(run.end)
         ax_align.axvspan(a, b, color="#ddd", alpha=0.6, zorder=0)

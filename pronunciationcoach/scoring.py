@@ -73,6 +73,7 @@ class PhoneScore:
     candidates: list[tuple[str, float]] = field(default_factory=list)  # top-k (phone, prob)
     dropped: bool = False  # the phone was not produced at all (see mark_dropped)
     natural: str = ""  # non-empty when a native rendering does the same thing (see reference.py)
+    inserted: str = ""  # "before" / "after": a sound added to the word that is not in it (see pipeline.attach_insertions)
 
     @property
     def heard_label(self) -> str:
@@ -82,7 +83,7 @@ class PhoneScore:
     def category(self) -> str:
         if self.natural:
             return "good"  # natives do it too
-        return "off" if self.dropped else category(self.gop)  # a sound not said at all is always an error
+        return "off" if self.dropped or self.inserted else category(self.gop)  # not said, or added: always an error
 
 
 # How much a deviation in a sound matters for being understood. Consonant contrasts that
@@ -94,6 +95,7 @@ PRIORITY: dict[str, float] = {
     "ŋ": 1.5, "ʌ": 1.5, "ɜː": 1.5, "ɝ": 1.5,
     "ə": 0.5, "ɐ": 0.5, "ᵻ": 0.5, "ɚ": 0.5,
 }
+INSERTION_PRIORITY = 2.0  # an added vowel ("e-speak", "English-e") is as marked as a wrong ɪ
 
 VERDICTS = ("clear", "accent", "almost", "work on this")
 
@@ -104,6 +106,14 @@ class WordScore:
     phones: list[PhoneScore]
     listener_p: float | None = None  # the listener's confidence in this word, None if no listener ran
     understood: bool | None = None  # the listener produced this word at all
+    insertions: list[PhoneScore] = field(default_factory=list)  # sounds added before/after the word (kept apart from `phones`, which mirror the expected sequence)
+
+    @property
+    def all_phones(self) -> list[PhoneScore]:
+        """The word as pronounced: insertions before, the expected sounds, insertions after."""
+        before = [p for p in self.insertions if p.inserted == "before"]
+        after = [p for p in self.insertions if p.inserted == "after"]
+        return before + self.phones + after
 
     @property
     def gop_mean(self) -> float:
@@ -117,9 +127,10 @@ class WordScore:
     def severity(self) -> float:
         """Worst deviation, weighted by how much that sound matters (0 = nothing flagged)."""
         flagged = [p for p in self.phones if p.category != "good"]
-        if not flagged:
+        if not flagged and not self.insertions:
             return 0.0
-        return max(PRIORITY.get(p.expected, 1.0) * (1.0 if p.category == "off" else 0.5) for p in flagged)
+        worst = max((PRIORITY.get(p.expected, 1.0) * (1.0 if p.category == "off" else 0.5) for p in flagged), default=0.0)
+        return max(worst, INSERTION_PRIORITY if self.insertions else 0.0)
 
     @property
     def verdict(self) -> str:

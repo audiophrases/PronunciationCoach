@@ -71,3 +71,14 @@ def test_word_feedback_explains_a_listener_hesitation_over_a_clean_word():
     see.listener_p, see.understood = 0.0, False
     fb = word_feedback(see)
     assert fb.band == "almost" and "another word" in fb.tips[0]
+
+
+def test_an_inserted_vowel_counts_against_the_word_and_is_explained():
+    speak = WordScore("speak", [ps("s", "s", 0.0), ps("p", "p", 0.0), ps("iː", "i", 0.0), ps("k", "k", 0.0)], listener_p=0.99, understood=True)
+    speak.insertions.append(PhoneScore(expected="", start_s=2.1, end_s=2.12, gop=-10.0, posterior=0.8, heard="ɛ", inserted="before"))
+    assert speak.severity == 2.0 and speak.verdict == "almost"
+    assert [p.heard for p in speak.all_phones] == ["ɛ", "s", "p", "i", "k"]
+    fb = word_feedback(speak)
+    assert fb.band == "almost" and "e-speak" in fb.tips[0] and "s* + consonant" in fb.tips[0]
+    text = summary([speak])
+    assert "an added vowel before s + consonant: 'e' as in *bed*" in text

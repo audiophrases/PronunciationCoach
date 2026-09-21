@@ -70,9 +70,9 @@ def _stamp() -> str:
 def log_assessment(log: logging.Logger, result: Assessment, l1: str, audio_16k: np.ndarray) -> Path | None:
     """Write the one-line summary (and the details in debug mode); archive the recording if asked."""
     flagged = [
-        f"{w.word}/{p.expected}->{p.heard_label}({p.gop:.1f})"
+        f"{w.word}/+{p.heard}" if p.inserted else f"{w.word}/{p.expected}->{p.heard_label}({p.gop:.1f})"
         for w in result.words
-        for p in w.phones
+        for p in w.all_phones
         if p.category != "good"
     ]
     timings = " ".join(f"{k}={v:.1f}s" for k, v in result.timings.items())
@@ -120,7 +120,7 @@ def log_assessment(log: logging.Logger, result: Assessment, l1: str, audio_16k: 
         "heard": result.heard_text,
         "words": [
             {"word": w.word, "gop_min": w.gop_min, "span": [round(sp.start, 3), round(sp.end, 3)], "crop": case,
-             "phones": [asdict(p) for p in w.phones]}
+             "phones": [asdict(p) for p in w.phones], "insertions": [asdict(p) for p in w.insertions]}
             for w, sp, case in zip(result.words, result.spans, result.span_cases or [""] * len(result.spans))
         ],
         "span_source": result.span_source,

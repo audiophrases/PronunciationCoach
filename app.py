@@ -291,7 +291,7 @@ def run(audio, text, accent_name, l1):
                 "tips": f.tips,
                 "guides": sound_guides(w),
                 "expected": [p.expected for p in w.phones],
-                "heard": [p.heard_label for p in w.phones],
+                "heard": [p.heard_label if not p.inserted else f"+{p.heard}" for p in w.all_phones],
             }
             for w, f, sp in zip(result.words, feedback, w_spans)
         ],

@@ -67,7 +67,16 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   deviations are colouring), **almost** (understood with effort, or a sound that matters),
   **work on this** (missed, or a top-priority contrast such as *th* or *v*) - from the listener's
   confidence and the worst deviation weighted by how much that sound matters (`PRIORITY` in
-  `scoring.py`). The score ring counts words understood.
+  `scoring.py`). The score ring counts words understood. The listener alone cannot fail a word whose
+  sounds were all right (its confidence also collapses over homophones and function words); it can
+  only turn it "almost" when it wrote another word entirely.
+* **Added sounds** – the wildcard between words absorbs repeats and hesitations, but a vowel glued to
+  a word that starts with *s* + consonant ("e-speak", "e-Spain": Spanish and Catalan have no such
+  onsets) or to a word-final consonant ("English-e") is an error, not a hesitation: `attach_insertions`
+  in `pipeline.py` moves it into the word (no pause between them, within 160 ms), it weighs like a
+  wrong ɪ, the word's crop includes it, and the tip says what to do. Note that in free-speech mode the
+  *words* come from Whisper, which is trained to spell accented speech correctly ("espeak" → *speak*);
+  the sounds are judged by the phoneme recogniser, which never sees Whisper's transcript.
 * **How to make the sound** – from the sibling project [GAPhonetics](https://audiophrases.github.io/GAPhonetics/)
   (24 GA vowels + 24 consonants, each with tongue/lips/jaw instructions, the sensation to feel, the
   mistake to avoid, an example word and human recordings). For every sound that needs work the word
@@ -143,17 +152,27 @@ its published site.
 1. the app starts on this machine;
 2. `cloudflared` (installed on first use) opens an outbound tunnel and gets a temporary
    `https://<random>.trycloudflare.com` address - no account, no router settings, HTTPS included,
-   which browsers require before allowing the microphone;
-3. `scripts/share.py` writes that address into `coach.json` on the `gh-pages` branch (through the
-   logged-in `gh`), next to the front door page `share/index.html`;
+   which browsers require before allowing the microphone. The tunnel runs over HTTP/2 (TCP) rather
+   than cloudflared's default QUIC, because school and guest networks often block the UDP port QUIC
+   needs, and cloudflared then prints an address that never connects;
+3. once the tunnel has actually registered, `scripts/share.py` writes that address into `coach.json`
+   on the `gh-pages` branch (through the logged-in `gh`), next to the front door page `share/index.html`;
 4. students open the **fixed** address `https://audiophrases.github.io/PronunciationCoach/`, which reads
-   the current address and forwards them; when nothing is running it says so and offers GAPhonetics
-   to practise with meanwhile. `stop_sharing.bat` (or Ctrl+C) marks it closed.
+   the current address, checks that it can be reached, and forwards them; when nothing is running it
+   says so and offers GAPhonetics to practise with meanwhile. `stop_sharing.bat` (or Ctrl+C) marks it closed.
+
+While sharing runs it looks after itself: the tunnel is probed end to end every minute and re-opened
+with a new address (republished) if Cloudflare drops it or the network hiccups; `coach.json` is
+re-stamped every four minutes, and the front door treats a session not heard from for 15 minutes as
+"connection lost" instead of sending students to a dead address (a machine that went to sleep or
+whose window was closed without stopping). Closing the console window also marks the front door closed.
+The machine is kept from sleeping on idle while sharing; closing a laptop's lid is a separate power
+setting, so leave it open or change the lid action.
 
 The front door reads the file from the GitHub API first (fresh within a minute) because GitHub Pages
 itself caches files for ten minutes. One recording is scored at a time, ~10-20 s each on this laptop:
 fine for homework or a small group, not for a whole class pressing the button at once. The laptop must
-stay awake and online.
+stay online.
 
 A sharing session keeps a full record for review afterwards, the same as `run_app_debug.bat`: every
 assessment with its per-phone detail in `logs\app.log` and every student recording archived in

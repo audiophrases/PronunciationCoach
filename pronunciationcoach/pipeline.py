@@ -18,7 +18,8 @@ from .boundaries import HOP, SPIKE_LAG_S, Span, energy_db, word_spans
 from .engine import DEFAULT_MODEL, Emissions, get_engine
 from .g2p import text_to_phones
 from .reference import acceptances, native_reference
-from .scoring import WordScore, score_words
+from .scoring import PhoneScore, WordScore, score_words
+from .variants import VOWELS
 
 
 @dataclass
@@ -141,13 +142,14 @@ def assess(
     t0 = time.perf_counter()
     casual = os.environ.get("PC_CASUAL", "1") == "1"  # accept connected-speech forms (variants.py)
     words = score_words(em, segments, counts, acceptances(word_phones, ref, lang, casual))
+    extra = attach_insertions(words, word_phones, segments, alignment.extra, em, audio)
     if heard_words is not None:
         for w, listened in zip(words, match_words([wp.word for wp in word_phones], heard_words)):
             w.listener_p, w.understood = listened.probability, listened.matched
     timings["score"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    spans, span_source, span_cases = locate_words(audio, word_phones, words, segments, alignment.extra, em.frame_ms)
+    spans, span_source, span_cases = locate_words(audio, word_phones, words, segments, extra, em.frame_ms)
     timings["crop"] = time.perf_counter() - t0
 
     return Assessment(
@@ -158,7 +160,7 @@ def assess(
         heard=heard,
         words=words,
         segments=segments,
-        extra=alignment.extra,
+        extra=extra,
         emissions=em,
         audio=audio,
         spans=spans,
@@ -176,6 +178,63 @@ WINDOW_BEFORE_S = 0.25
 WINDOW_AFTER_S = 0.25
 
 
+# The wildcard between words absorbs anything that is not in the sentence - repeats, "uh",
+# a breath - and reports it as an extra run. One kind of extra is a pronunciation error and
+# must stay with its word: a vowel glued to a word that starts with s + consonant ("e-speak",
+# "e-Spain" - Spanish and Catalan have no such word onsets) or to a word-final consonant
+# ("English-e"). Glued means the next sound follows within INSERT_GAP_S with no silence.
+INSERT_GAP_S = 0.16  # spike to spike
+INSERT_VOWELS = VOWELS - {"eɪ", "aɪ", "ɔɪ", "oʊ", "aʊ", "əʊ"}  # a diphthong is a word ("I", "a"), not an epenthetic vowel
+
+
+def attach_insertions(words, word_phones, segments, extra, em, audio) -> list:
+    """Move epenthetic vowels from the extra runs into the neighbouring word's `insertions`;
+    return the extra runs that remain."""
+    frame_s = em.frame_ms / 1000.0
+    db = energy_db(audio)
+    silent = float(np.percentile(db, 10)) + SILENCE_ABOVE_FLOOR_DB
+    step = HOP / SAMPLE_RATE
+
+    def pause_between(a: float, b: float) -> bool:
+        return any(db[min(int(t / step), len(db) - 1)] < silent for t in np.arange(a, max(a, b), step))
+
+    by_word, cursor = [], 0
+    for w in words:
+        by_word.append(segments[cursor : cursor + len(w.phones)])
+        cursor += len(w.phones)
+
+    def score(run, where: str) -> PhoneScore:
+        block = np.exp(em.log_probs[run.start : run.end + 1])
+        block[:, em.blank_id] = 0
+        mass = block.sum(axis=0)
+        p = float(mass[em.labels.index(run.phones[0])] / mass.sum()) if run.phones[0] in em.labels and mass.sum() > 0 else 0.0
+        return PhoneScore(expected="", start_s=run.start * frame_s, end_s=run.end * frame_s, gop=-10.0, posterior=p,
+                          heard=run.phones[0], inserted=where)
+
+    remaining = []
+    for run in extra:
+        if len(run.phones) != 1 or run.phones[0] not in INSERT_VOWELS:
+            remaining.append(run)
+            continue
+        run_start, run_end = run.start * frame_s, run.end * frame_s
+        attached = False
+        for w, wp, segs in zip(words, word_phones, by_word):
+            first, last = segs[0].start * frame_s, segs[-1].end * frame_s
+            starts_with_cluster = len(wp.phones) >= 2 and wp.phones[0] == "s" and wp.phones[1] not in VOWELS
+            if starts_with_cluster and 0 <= first - run_end <= INSERT_GAP_S and not pause_between(run_end, first - SPIKE_LAG_S):
+                w.insertions.append(score(run, "before"))
+                attached = True
+                break
+            ends_with_consonant = wp.phones[-1] not in VOWELS
+            if ends_with_consonant and 0 <= run_start - last <= INSERT_GAP_S and not pause_between(last, run_start):
+                w.insertions.append(score(run, "after"))
+                attached = True
+                break
+        if not attached:
+            remaining.append(run)
+    return remaining
+
+
 def locate_words(audio, word_phones, words, segments, extra, frame_ms) -> tuple[list[Span], str, list[str]]:
     """Word crops from Charsiu's frame aligner, anchored to the scoring aligner's spikes so
     repeats and hesitations (the wildcard runs) cannot be swallowed by a neighbouring word.
@@ -187,9 +246,19 @@ def locate_words(audio, word_phones, words, segments, extra, frame_ms) -> tuple[
     dropped = [[p.dropped for p in w.phones] for w in words]
     frame_s = frame_ms / 1000.0
 
+    def inserted(i, where):
+        return [Segment(p.heard, 0, round(p.start_s / frame_s), round(p.end_s / frame_s) + 1, 0.0)
+                for p in words[i].insertions if p.inserted == where]
+
     def kept(i):
+        """The word's spikes as pronounced: an inserted vowel belongs to the word's crop."""
         segs = [s for s, d in zip(by_word[i], dropped[i]) if not d]
-        return segs or by_word[i]
+        return inserted(i, "before") + (segs or by_word[i]) + inserted(i, "after")
+
+    def pronounced(i):
+        w = words[i]
+        return ([p.heard for p in w.insertions if p.inserted == "before"] + list(word_phones[i].phones)
+                + [p.heard for p in w.insertions if p.inserted == "after"])
 
     try:
         from .segmenter import get_segmenter, to_arpabet
@@ -205,7 +274,7 @@ def locate_words(audio, word_phones, words, segments, extra, frame_ms) -> tuple[
                 hi = min(hi, kept(i + 1)[0].end * frame_s)  # not past the next word's first spike
             windows.append((max(0.0, lo), hi))
         extras = [(r.start * frame_s, r.end * frame_s) for r in extra if len(r.phones) >= 2]
-        spans = seg.align(seg.frame_log_probs(audio), [to_arpabet(wp.phones) for wp in word_phones], windows, extras)
+        spans = seg.align(seg.frame_log_probs(audio), [to_arpabet(pronounced(i)) for i in range(len(by_word))], windows, extras)
         spans, cases = settle_starts(spans, [kept(i) for i in range(len(by_word))], audio, frame_s)
         return spans, "charsiu", cases
     except Exception as exc:  # model not downloadable, out of memory, ...
