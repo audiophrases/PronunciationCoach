@@ -16,6 +16,7 @@ from .audio import duration_s, to_mono_16k
 from . import SAMPLE_RATE
 from .boundaries import HOP, SPIKE_LAG_S, Span, energy_db, word_spans
 from .chunks import PlaybackChunk, build_chunks, safe_spans
+from .crop_recheck import CropCheck, CropEvidence, recheck_chunks
 from .engine import DEFAULT_MODEL, Emissions, get_engine
 from .g2p import text_to_phones
 from .reference import acceptances, native_reference
@@ -42,6 +43,8 @@ class Assessment:
     unknown_phones: list[str] = field(default_factory=list)  # expected phones the model has no label for
     timings: dict[str, float] = field(default_factory=dict)
     chunks: list[PlaybackChunk] = field(default_factory=list)
+    crop_checks: list[CropCheck] = field(default_factory=list)
+    crop_recheck_mode: str = "disabled"
 
     @property
     def phones(self):
@@ -151,7 +154,8 @@ def assess(
     timings["score"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    spans, span_source, span_cases = locate_words(audio, word_phones, words, segments, extra, em.frame_ms)
+    crop_evidence: list[CropEvidence] = []
+    spans, span_source, span_cases = locate_words(audio, word_phones, words, segments, extra, em.frame_ms, crop_evidence)
     dropped_words = [bool(w.phones) and all(p.dropped for p in w.phones) and not w.insertions for w in words]
     spans = safe_spans(spans, duration_s(audio), dropped_words)
     timings["crop"] = time.perf_counter() - t0
@@ -161,6 +165,17 @@ def assess(
                           [(r.start * em.frame_ms / 1000, r.end * em.frame_ms / 1000) for r in extra],
                           enabled=os.environ.get("PC_CHUNKS", "1") != "0")
     timings["chunk"] = time.perf_counter() - t0
+
+    t0 = time.perf_counter()
+    recheck_mode = os.environ.get("PC_CROP_RECHECK", "audit").lower()
+    crop_checks = []
+    if recheck_mode != "0" and crop_evidence:
+        chunks, crop_checks = recheck_chunks(chunks, crop_evidence[0], duration_s(audio), dropped_words,
+                                            apply=recheck_mode == "1")
+        recheck_mode = "apply" if recheck_mode == "1" else "audit"
+    else:
+        recheck_mode = "disabled" if recheck_mode == "0" else "unavailable"
+    timings["crop_recheck"] = time.perf_counter() - t0
 
     return Assessment(
         text=text,
@@ -180,6 +195,8 @@ def assess(
         unknown_phones=unknown,
         timings=timings,
         chunks=chunks,
+        crop_checks=crop_checks,
+        crop_recheck_mode=recheck_mode,
     )
 
 
@@ -246,7 +263,8 @@ def attach_insertions(words, word_phones, segments, extra, em, audio) -> list:
     return remaining
 
 
-def locate_words(audio, word_phones, words, segments, extra, frame_ms) -> tuple[list[Span], str, list[str]]:
+def locate_words(audio, word_phones, words, segments, extra, frame_ms,
+                 evidence: list[CropEvidence] | None = None) -> tuple[list[Span], str, list[str]]:
     """Word crops from Charsiu's frame aligner, anchored to the scoring aligner's spikes so
     repeats and hesitations (the wildcard runs) cannot be swallowed by a neighbouring word.
     Falls back to the spike-based estimate if the aligner is unavailable."""
@@ -285,8 +303,16 @@ def locate_words(audio, word_phones, words, segments, extra, frame_ms) -> tuple[
                 hi = min(hi, kept(i + 1)[0].end * frame_s)  # not past the next word's first spike
             windows.append((max(0.0, lo), hi))
         extras = [(r.start * frame_s, r.end * frame_s) for r in extra if len(r.phones) >= 2]
-        spans = seg.align(seg.frame_log_probs(audio), [to_arpabet(pronounced(i)) for i in range(len(by_word))], windows, extras)
+        phones = [to_arpabet(pronounced(i)) for i in range(len(by_word))]
+        log_probs = seg.frame_log_probs(audio)
+        raw_spans = seg.align(log_probs, phones, windows, extras)
+        spans = raw_spans
         spans, cases = settle_starts(spans, [kept(i) for i in range(len(by_word))], audio, frame_s)
+        if evidence is not None:
+            evidence.append(CropEvidence(seg, log_probs, phones, windows, raw_spans,
+                                        [Span(kept(i)[0].start * frame_s, kept(i)[-1].end * frame_s)
+                                         for i in range(len(by_word))],
+                                        [(r.start * frame_s, r.end * frame_s) for r in extra]))
         return spans, "charsiu", cases
     except Exception as exc:  # model not downloadable, out of memory, ...
         logging.getLogger("pronunciationcoach").warning("Charsiu segmenter unavailable (%s); using spike-based crops", exc)

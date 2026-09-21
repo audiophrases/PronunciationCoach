@@ -98,6 +98,10 @@ def audit_chunks(audio, meta, words, spans, assessment=None):
         print(f"     [{chunk.text}] {timing} | {chunk.reason}" + (" | " + ", ".join(flags) if flags else ""))
     invalid = sum(not np.isfinite([a, b]).all() or a < 0 or b < a or b > len(audio) / SAMPLE_RATE + 1e-8 for a, b in spans)
     print(f"   {len(chunks)} chunks | weak/short singletons {orphan} | invalid input crops {invalid} | overlaps {overlaps}")
+    if assessment is not None:
+        print(f"   Second pass: {assessment.crop_recheck_mode}")
+        for check in assessment.crop_checks:
+            print(f"     {check.summary()}")
     if meta.get("chunks") is not None:
         changed = [c.members for c in chunks] != [c["members"] for c in meta["chunks"]]
         print(f"   Membership changed from archive: {changed}")

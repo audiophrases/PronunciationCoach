@@ -90,6 +90,10 @@ def test_explicit_buttons_speed_and_missing_audio(ui, monkeypatch):
 
 def test_archive_preserves_chunks_and_timing_units(assessment, monkeypatch, tmp_path):
     from pronunciationcoach import logs
+    from pronunciationcoach.crop_recheck import CropCheck
+    assessment.crop_recheck_mode = "audit"
+    assessment.crop_checks = [CropCheck(0, "can you", Span(.2, .48), Span(.18, .48), Span(.2, .48),
+                                      ["possibly clipped onset"], "uncertain", "insufficient evidence")]
     monkeypatch.setattr(logs, "SAVE_RECORDINGS", True)
     monkeypatch.setattr(logs, "REC_DIR", tmp_path)
     wav = logs.log_assessment(logging.getLogger("chunk-archive-test"), assessment, assessment.audio)
@@ -98,6 +102,9 @@ def test_archive_preserves_chunks_and_timing_units(assessment, monkeypatch, tmp_
     assert [c["members"] for c in meta["chunks"]] == [[0, 1], [2, 3]]
     assert meta["chunks"][0]["span"] == {"start": .2, "end": .48}
     assert meta["words"][1]["listener_p"] == .95
+    assert meta["crop_recheck_mode"] == "audit"
+    assert meta["crop_checks"][0]["before"] == {"start": .2, "end": .48}
+    assert meta["crop_checks"][0]["status"] == "uncertain"
 
 
 def test_three_word_group_keeps_individual_selection_and_routes_both_voices(ui, assessment, monkeypatch):

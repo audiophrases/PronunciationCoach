@@ -99,6 +99,8 @@ def log_assessment(log: logging.Logger, result: Assessment, audio_16k: np.ndarra
     log.info("crops (%s): %s", result.span_source,
              " | ".join(f"{w.word} {sp.start:.2f}-{sp.end:.2f} {case}".rstrip() for w, sp, case in zip(result.words, result.spans, cases)))
     log.info("playback: %s", " | ".join(f"[{c.text}] {c.reason}" for c in result.chunks))
+    log.info("crop recheck (%s): %s", result.crop_recheck_mode,
+             " | ".join(c.summary() for c in result.crop_checks) or "no flagged edges")
     if log.isEnabledFor(logging.DEBUG):
         for w in result.words:
             for p in w.phones:
@@ -119,6 +121,8 @@ def log_assessment(log: logging.Logger, result: Assessment, audio_16k: np.ndarra
         "sample_rate": SAMPLE_RATE,
         "frame_ms": result.emissions.frame_ms,
         "chunks": [asdict(c) for c in result.chunks],
+        "crop_recheck_mode": result.crop_recheck_mode,
+        "crop_checks": [asdict(c) for c in result.crop_checks],
         "heard": result.heard_text,
         "words": [
             {"word": w.word, "gop_min": w.gop_min, "span": [round(sp.start, 3), round(sp.end, 3)], "crop": case,

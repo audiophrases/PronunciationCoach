@@ -343,6 +343,8 @@ def run(audio, text, accent_name):
         + (f"No model label for: {' '.join(result.unknown_phones)}\n" if result.unknown_phones else "")
         + f"Word crops: {result.span_source} · native reference: {', '.join(result.reference_voices) or 'none'}\n"
         + "Playback: " + " | ".join(f"[{c.text}] ({c.reason})" for c in result.chunks) + "\n"
+        + f"Crop recheck: {result.crop_recheck_mode}\n"
+        + "".join(c.summary() + "\n" for c in result.crop_checks)
         + ("Sound guidance and clips: GAPhonetics (human US recordings; Wiktionary/Wikimedia Commons contributors, CC BY-SA 3.0 / CC0 - credits in its *-audio-sources.json)\n" if PHONETICS else "")
         + f"{result.duration_s:.1f} s of audio · {timing}"
     )

@@ -82,6 +82,21 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   membership and reasons. `scripts/crop_check.py --rechunk` audits archived recordings without
   model inference (old archives assume 20 ms scoring frames). Set `PC_CHUNKS=0` to compare with
   individual-word playback; no new model or dependency is needed.
+* **Second-pass crop checks** – suspicious playback edges are re-aligned with one and then two
+  neighboring words, using the existing full-recording Charsiu output and slightly relaxed
+  search windows. No additional model or neural inference is needed. Short crops, disagreeing
+  onset estimates, possible clipped tails and nearby extra speech trigger a check. At most eight
+  regions are checked per assessment, with at most eight seconds of surrounding speech per search.
+  The default, `PC_CROP_RECHECK=audit`, records proposals and uncertainty in the technical details,
+  logs and recording JSON; playback stays unchanged. `PC_CROP_RECHECK=0` disables the check.
+  Experimental `PC_CROP_RECHECK=1` permits only 20–80 ms outward extensions supported by both
+  searches and the edge phone's frame probabilities, inside unclaimed audio. Repetitions,
+  missing context, ambiguous joins and failed searches retain the original crop. It never trims
+  a quiet onset or changes word scores/group membership. This is a consistency check using the
+  same model, not an independent guarantee that a crop sounds right. Initial testing on seven
+  synthetic examples and one learner recording accepted no changes, so automatic adjustments
+  remain off. `scripts/recheck_compare.py` produces before/after JSON and a local listening page
+  from saved examples; TTS metadata comparisons are proxies, not human listening judgments.
 * **Speech, not dictionary words** – three things stop natural, connected speech from being
   penalised. (1) *Native reference by example*: the sentence is synthesised with two natural
   voices and run through our own recogniser, and whatever it hears a native do in that position

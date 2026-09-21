@@ -111,6 +111,8 @@ class CharsiuSegmenter:
             word_of += [None, None]
 
         T, S = log_probs.shape[0], len(states)
+        if T == 0 or not words:
+            raise ValueError("alignment requires frames and words")
         NEG = -1e9
         t_axis = (np.arange(T) + 0.5) * FRAME_S - OFFSET_S
         in_window = np.zeros(T, dtype=bool)
@@ -156,6 +158,8 @@ class CharsiuSegmenter:
             score[t] = best + emit[t]
             back[t] = src
         s = int(S - 3 + np.argmax(score[T - 1, S - 3 :]))  # end in the final phone, SIL or ANY
+        if not np.isfinite(score[T - 1, s]) or score[T - 1, s] <= NEG / 2:
+            raise ValueError("no feasible alignment inside word windows")
         path = np.empty(T, dtype=np.int32)
         for t in range(T - 1, -1, -1):
             path[t] = s
