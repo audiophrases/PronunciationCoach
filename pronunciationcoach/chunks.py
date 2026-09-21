@@ -109,7 +109,8 @@ def build_chunks(text: str, words: list[str], spans: list[Span], audio: np.ndarr
         return lower[i] in AUXILIARIES or (lower[i] in AMBIGUOUS_VERBS and i + 1 < n and
                                            lower[i + 1] in SUBJECTS | {"to", "not", "been", "got"})
 
-    weak = [(w in FUNCTION_WORDS or auxiliary(i)) and not strong[i] for i, w in enumerate(lower)]
+    function = [w in FUNCTION_WORDS or auxiliary(i) for i, w in enumerate(lower)]
+    weak = [candidate and not strong[i] for i, candidate in enumerate(function)]
     barriers = []
     for i in range(n - 1):
         separator = text[matches[i].end():matches[i + 1].start()] if matched else ""
@@ -124,7 +125,9 @@ def build_chunks(text: str, words: list[str], spans: list[Span], audio: np.ndarr
             continue
         a, b = spans[left].end, spans[right].start
         run = longest = 0
-        for quiet in levels(a - .04, b + .04) < silent:
+        # Inspect enough audio to detect a 100 ms pause even when the aligner
+        # allocated its two halves to touching word crops.
+        for quiet in levels(a - PAUSE_S, b + PAUSE_S) < silent:
             run = run + 1 if quiet else 0
             longest = max(longest, run)
         if any(x < b + .02 and y > a - .02 for x, y in extras or []):
@@ -144,7 +147,7 @@ def build_chunks(text: str, words: list[str], spans: list[Span], audio: np.ndarr
         a, b = lower[i], lower[j]
         choices = [(0, "")]
         # Emphasized grammar words stand alone; content-word hosts may be stressed.
-        if (a in FUNCTION_WORDS | AMBIGUOUS_VERBS and strong[i]) or (b in FUNCTION_WORDS | AMBIGUOUS_VERBS and strong[j]):
+        if (function[i] and strong[i]) or (function[j] and strong[j]):
             candidates.append((0, ""))
             continue
         if weak[i] and auxiliary(i) and b in SUBJECTS:

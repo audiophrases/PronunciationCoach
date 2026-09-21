@@ -50,6 +50,21 @@ def test_emphasized_function_word_stays_separate():
     assert len(chunks("we CAN go", "we CAN go", [(.2, .3), (.3, .7), (.7, .95)])) == 3
 
 
+def test_main_verb_can_host_a_pronoun_and_a_quiet_slow_auxiliary_can_pair():
+    assert [c.text for c in chunks("I have books", "I have books", [(.2, .35), (.35, .75), (.75, 1.)])] == ["I have", "books"]
+    samples = audio()
+    samples[int(.3 * SAMPLE_RATE):int(.7 * SAMPLE_RATE)] *= .1
+    result = build_chunks("we can go", ["we", "can", "go"], [Span(.2, .3), Span(.3, .7), Span(.7, .95)], samples)
+    assert [c.text for c in result] == ["we", "can go"]
+
+
+def test_pause_inside_touching_crops_still_blocks_a_pair():
+    samples = audio()
+    samples[int(.44 * SAMPLE_RATE):int(.56 * SAMPLE_RATE)] = 0
+    result = build_chunks("can you", ["can", "you"], [Span(.2, .5), Span(.5, .8)], samples)
+    assert len(result) == 2 and result[0].blocked_after == "pause"
+
+
 @pytest.mark.parametrize("text,bounds,extras", [
     ("can, you", [(.2, .4), (.4, .6)], []),
     ("can you", [(.2, .4), (.6, .8)], []),
