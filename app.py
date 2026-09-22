@@ -51,7 +51,43 @@ CSS = """
 .score-card li { margin: .15rem 0; }
 .score-card .headline { font-size: 1.05rem; font-weight: 600; margin-bottom: .2rem; }
 .hint { opacity: .7; font-size: .9rem; }
+#review-columns { align-items: flex-start; }
+#word-column { position: sticky; top: 1rem; }
+#word-panel { padding: 1rem; border: 1px solid var(--border-color-primary); border-radius: 1rem;
+    background: var(--block-background-fill); }
+#word-column:has(#word-panel) #word-placeholder { display: none; }
+#sentence .token.highlighted:focus-visible { outline: 3px solid var(--color-accent); }
+#sentence .token.coach-selected { outline: 3px solid var(--body-text-color); outline-offset: 2px; }
+#review-toolbar { align-items: center; }
+@media (max-width: 767px) {
+    #review-columns { flex-direction: column; }
+    #review-columns > .column { width: 100%; }
+    #word-column { position: static; min-width: 0 !important; }
+    #word-placeholder { display: none; }
+    #review:has(#word-panel) { padding-bottom: 55dvh; }
+    #word-panel { position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
+        max-height: 55dvh; overflow-y: auto; overscroll-behavior: contain;
+        border-radius: 1rem 1rem 0 0; box-shadow: 0 -8px 30px #0002;
+        padding-bottom: max(1rem, env(safe-area-inset-bottom)); }
+    #sentence .textfield { font-size: 1.2rem; line-height: 2.7; }
+    .score-card .ring { width: 75px; height: 75px; }
+}
 """
+
+# Delegation survives Gradio replacing the sentence after another assessment.
+REVIEW_JS = """() => {
+    if (window.coachSelectionInstalled) return;
+    window.coachSelectionInstalled = true;
+    const selectWord = (event) => {
+        if (event.type === 'keydown' && !['Enter', ' '].includes(event.key)) return;
+        const token = event.target.closest('#sentence .token.highlighted');
+        if (!token) return;
+        document.querySelectorAll('#sentence .coach-selected').forEach(el => el.classList.remove('coach-selected'));
+        token.classList.add('coach-selected');
+    };
+    document.addEventListener('click', selectWord);
+    document.addEventListener('keydown', selectWord);
+}"""
 
 
 def english_ui() -> gr.I18n:
@@ -460,48 +496,58 @@ def play_guide_word(label, state):
 
 with gr.Blocks(title="Pronunciation Coach") as demo:
     gr.Markdown("# Pronunciation Coach")
-    with gr.Row(equal_height=True):
-        with gr.Column(scale=2):
-            audio = gr.Audio(sources=["microphone", "upload"], type="numpy", label="1. Record yourself")
-        with gr.Column(scale=3):
-            text = gr.Textbox(label="2. The sentence you are reading (leave empty to just talk)", lines=2)
-            button = gr.Button("3. Check my pronunciation", variant="primary")
+    with gr.Accordion("Recording & sentence", open=True, elem_id="setup") as setup:
+        with gr.Row(equal_height=True):
+            with gr.Column(scale=2):
+                audio = gr.Audio(sources=["microphone", "upload"], type="numpy", label="Record yourself")
+            with gr.Column(scale=3):
+                text = gr.Textbox(label="Sentence you are reading (optional)",
+                                  placeholder="Leave empty to just talk", lines=2)
+                button = gr.Button("Check my pronunciation", variant="primary", size="md")
 
-    with gr.Row():
-        with gr.Column(scale=2):
-            card = gr.HTML()
-            note = gr.Markdown()
-        with gr.Column(scale=3):
-            words_hl = gr.HighlightedText(
-                label="Tap a word to hear it in context when useful; tap again for the model",
-                color_map=BAND_COLOR,
-                show_legend=True,
-                show_inline_category=False,
-                elem_id="sentence",
-            )
-            speed = gr.Slider(
-                SPEED_MIN, SPEED_MAX, value=SPEED_DEFAULT, step=SPEED_STEP,
-                label="Playback speed (you and the model)",
-                info="1 = as spoken. Around 0.7 is good for hearing the sounds in a word.",
-            )
-            with gr.Row():
-                btn_you = gr.Button("▶ You")
-                btn_model = gr.Button("▶ Model")
-            player = gr.Audio(label="Now playing", autoplay=True, interactive=False, elem_id="player")
-
-    with gr.Group(visible=False) as word_panel:
-        word_head = gr.Markdown()
-        with gr.Row():
-            btn_word_you = gr.Button("▶ You said this")
-            btn_word_model = gr.Button("▶ Model says this")
-        word_tips = gr.Markdown()
-        with gr.Group(visible=False) as guide_panel:
-            gr.Markdown("#### How to make it")
-            sound_pick = gr.Radio(choices=[], label="Sound to work on")
-            with gr.Row():
-                btn_guide_sound = gr.Button("▶ Hear the sound")
-                btn_guide_word = gr.Button("▶ Hear it in a word")
-            guide_md = gr.Markdown()
+    with gr.Column(visible=False, elem_id="review") as review:
+        with gr.Row(elem_id="review-toolbar"):
+            gr.Markdown("## Your assessment")
+            retry = gr.Button("Try again", size="sm", scale=0, min_width=100)
+        card = gr.HTML()
+        note = gr.Markdown()
+        with gr.Row(elem_id="review-columns"):
+            with gr.Column(scale=3, min_width=280):
+                words_hl = gr.HighlightedText(
+                    label="Your sentence",
+                    color_map=BAND_COLOR,
+                    show_legend=True,
+                    show_inline_category=False,
+                    elem_id="sentence",
+                )
+                gr.Markdown("Tap a word for feedback and your recording. Tap again to hear the model.")
+                with gr.Row():
+                    btn_you = gr.Button("▶ Whole recording", size="sm")
+                    btn_model = gr.Button("▶ Whole model", size="sm")
+                player = gr.Audio(label="Now playing", autoplay=True, interactive=False, elem_id="player")
+                with gr.Accordion("Playback speed", open=False):
+                    speed = gr.Slider(
+                        SPEED_MIN, SPEED_MAX, value=SPEED_DEFAULT, step=SPEED_STEP,
+                        label="Speed for you and the model",
+                        info="1 = as spoken. Try 0.7 to hear individual sounds.",
+                    )
+            with gr.Column(scale=2, min_width=280, elem_id="word-column"):
+                gr.Markdown("### Word feedback\nSelect a word to compare and practise it.", elem_id="word-placeholder")
+                with gr.Column(visible=False, elem_id="word-panel", min_width=0) as word_panel:
+                    with gr.Row():
+                        gr.Markdown("### Word feedback")
+                        close_word = gr.Button("Close word feedback", size="sm", scale=0, min_width=130)
+                    word_head = gr.Markdown()
+                    with gr.Row():
+                        btn_word_you = gr.Button("▶ Hear yourself", size="sm")
+                        btn_word_model = gr.Button("▶ Hear model", size="sm")
+                    word_tips = gr.Markdown()
+                    with gr.Accordion("How to make this sound", open=False, visible=False) as guide_panel:
+                        sound_pick = gr.Radio(choices=[], label="Sound to work on")
+                        with gr.Row():
+                            btn_guide_sound = gr.Button("▶ Hear the sound", size="sm")
+                            btn_guide_word = gr.Button("▶ Hear it in a word", size="sm")
+                        guide_md = gr.Markdown()
 
     with gr.Accordion("Technical details (for teachers)", open=False):
         with gr.Row():
@@ -525,11 +571,21 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
         plot = gr.Plot(label="Phone posteriors over time")
 
     state = gr.State()
-    button.click(
+    check = button.click(
         run,
         [audio, text, accent],
         [card, note, words_hl, state, player, word_panel, tech_text, timeline, ipa_hl, table, plot],
     )
+    check.success(
+        lambda: (gr.update(open=False, label="Recording & sentence · Edit"), gr.update(visible=True)),
+        outputs=[setup, review],
+    )
+    retry.click(
+        lambda: (gr.update(open=True, label="Recording & sentence"), gr.update(visible=False), None),
+        outputs=[setup, word_panel, player], queue=False,
+    ).then(fn=None, js="() => document.getElementById('setup')?.scrollIntoView({block: 'start', behavior: 'smooth'})")
+    close_word.click(lambda: (gr.update(visible=False), None), outputs=[word_panel, player], queue=False)
+    demo.load(fn=None, js=REVIEW_JS)
     words_hl.select(pick_word, [state, speed, voice], [word_panel, word_head, word_tips, player, state, guide_panel, sound_pick, guide_md])
     sound_pick.change(pick_sound, [sound_pick, state], [guide_md])
     btn_guide_sound.click(play_guide_sound, [sound_pick, state], [player])
