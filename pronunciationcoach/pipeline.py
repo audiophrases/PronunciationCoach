@@ -304,7 +304,11 @@ def attach_insertions(words, word_phones, segments, extra, em, audio) -> list:
 # reordered word does not raise - it silently shifts its neighbours (measured: up to
 # 250 ms, enough that tapping "like" plays "my"). These gates, not MFA's own errors, are
 # what decide whether its answer is usable.
-MFA_ANCHOR_TOL_S = 0.15  # |MFA start - spike onset|; <=90 ms on 67 good words, 250 ms on an omission
+# |calibrated MFA start - spike onset|, measured over 78 correctly-transcribed words:
+# median 0 ms, p95 40 ms, worst 110 ms. With one word omitted from the reading the same
+# figure reaches 210 ms, so 150 ms separates the two - but only by 40 ms on the good side.
+# A false reject costs nothing worse than falling back to Charsiu, so err on rejecting.
+MFA_ANCHOR_TOL_S = 0.15
 
 
 def mfa_reject_reason(words, word_phones, extra, dropped_words: list[bool] | None) -> str:
@@ -318,6 +322,8 @@ def mfa_reject_reason(words, word_phones, extra, dropped_words: list[bool] | Non
         return "disabled"
     if not word_phones:
         return "no words"
+    if any(not w.phones for w in words):
+        return "a word has no phones to anchor against"  # kept() would be empty
     if dropped_words and any(dropped_words):
         return "a word was not said"
     if any(w.understood is False for w in words):

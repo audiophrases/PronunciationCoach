@@ -80,14 +80,21 @@ def _extract_acoustic_model() -> None:
     target = WORK / "english_mfa"
     if (target / "final.mdl").exists():
         return
-    staging = WORK / "english_mfa.partial"
+    # Stage under this process's own name: a second app instance starting at the same
+    # moment must not be able to delete the directory our worker is already reading.
+    staging = WORK / f"english_mfa.partial-{os.getpid()}"
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True, exist_ok=True)
-    with zipfile.ZipFile(ACOUSTIC_ZIP) as archive:
-        archive.extractall(staging)
-    shutil.rmtree(target, ignore_errors=True)
-    (staging / "english_mfa").rename(target)  # only now is the directory complete
-    shutil.rmtree(staging, ignore_errors=True)
+    try:
+        with zipfile.ZipFile(ACOUSTIC_ZIP) as archive:
+            archive.extractall(staging)
+        try:
+            (staging / "english_mfa").rename(target)  # only now is the directory complete
+        except OSError:
+            if not (target / "final.mdl").exists():
+                raise  # someone else won the race and finished first, which is fine
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
 
 
 def _confine_to_job(process: subprocess.Popen) -> None:
