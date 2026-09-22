@@ -251,6 +251,40 @@ tested against. Until then, the app runs on the teacher's own machine.
 
 ## Models
 
+### Experimental MFA comparison
+
+Run `launchers/setup_mfa.bat` once, then `launchers/compare_mfa.bat` to open an
+audio and waveform comparison against saved `recordings/*.json` + `.wav` pairs.
+The CLI equivalent is `uv run python scripts/mfa_compare.py "recordings/*.json"`.
+Results go to `tmp/mfa-review.html` and `tmp/mfa-review.json`; each run also keeps
+MFA's raw word/phone intervals and logs in its own `tmp/mfa-trial-*` directory.
+Use `--reuse tmp/mfa-review.json` to rebuild the listening page without rerunning
+matching alignments. Input audio, transcript, MFA version and model hashes must match.
+
+The trial uses MFA 3.4.2, the English acoustic model v3.1.0 and the **US** English
+dictionary v3.1.0. It aligns whole utterances with `align_one`, without speaker
+adaptation. The Windows setup uses a separate `.cache/mfa-env` environment;
+`scripts/mfa-win-64.lock` pins all packages, and the model downloads are checked
+against SHA-256 hashes. Run setup on both machines; do not copy the environment.
+The first installation downloads roughly 510 MB of packages/models. The normal
+app and its Python environment are unchanged by this optional setup.
+
+The report holds existing word groups fixed and compares individual words as
+well. Legacy archives without groups use individual words. Both sides use the
+same playback padding, fade and gain. It reports **boundary disagreement**, not
+accuracy: manually reviewed boundaries are still needed to establish improvement.
+Forced alignment can assign times to omitted words, so the trial rejects output
+token mismatches and invalid intervals, but does not treat a valid alignment as
+proof that every word was spoken. The app continues using its existing aligner
+until the trial has been reviewed. Recorded elapsed times include process/model
+startup and should not be interpreted as optimized, warm-server latency.
+
+Sources: [MFA installation](https://montreal-forced-aligner.readthedocs.io/en/latest/installation.html),
+[single-file alignment](https://montreal-forced-aligner.readthedocs.io/en/latest/user_guide/workflows/alignment.html),
+[US dictionary](https://mfa-models.readthedocs.io/en/latest/dictionary/English/English%20%28US%29%20MFA%20dictionary%20v3_1_0.html).
+
+### App models
+
 | Role | Default | Notes |
 | --- | --- | --- |
 | Phoneme recogniser | `facebook/wav2vec2-lv-60-espeak-cv-ft` | Multilingual espeak-IPA labels, so non-English phones a learner produces are visible |
