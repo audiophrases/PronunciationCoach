@@ -113,13 +113,14 @@ def test_out_of_vocabulary_words_are_caught_before_aligning(monkeypatch):
     assert "not in the dictionary: two" in pipeline.mfa_reject_reason(words, phones, [], [False, False])
 
 
-def test_the_measured_calibration_offset_is_applied(monkeypatch):
-    """MFA runs late against ground truth by a near-constant amount, like Charsiu."""
+def test_the_calibration_offset_moves_starts_but_never_ends(monkeypatch):
+    """Moving ends earlier clips the word's final sound, the most audible crop error."""
     from pronunciationcoach import mfa, mfa_worker, pipeline
 
+    monkeypatch.setattr(mfa, "OFFSET_S", .04)
     monkeypatch.setattr(mfa_worker, "align",
                         lambda *a, **k: ({"duration": 1.0, "tiers": {"words": {"entries": [
                             [.5, .8, "one"]]}}}, .01))
     spans = pipeline.real_mfa_spans(AUDIO, ["one"], 1.0)  # conftest blocks the patched name
     assert spans[0].start == pytest.approx(.5 - mfa.OFFSET_S)
-    assert spans[0].end == pytest.approx(.8 - mfa.OFFSET_S)
+    assert spans[0].end == pytest.approx(.8)

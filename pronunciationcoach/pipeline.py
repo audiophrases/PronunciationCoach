@@ -351,7 +351,7 @@ def mfa_spans(audio, words_to_align: list[str], duration: float) -> list[Span]:
 
     reply, _ = align(audio, " ".join(words_to_align))
     spans = mfa.word_spans(reply, words_to_align, reply.get("duration", duration))
-    return [Span(max(0.0, sp.start - mfa.OFFSET_S), max(0.0, sp.end - mfa.OFFSET_S)) for sp in spans]
+    return mfa.calibrate(spans)
 
 
 def locate_words(audio, word_phones, words, segments, extra, frame_ms,

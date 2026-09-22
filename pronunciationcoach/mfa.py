@@ -22,15 +22,20 @@ ROOT = Path(__file__).resolve().parents[1]
 MODEL = "english_mfa"
 DICTIONARY = "english_us_mfa"  # used for both accents; see README
 
-# MFA's boundaries sit late against ground truth by a near-constant amount, the same
-# way Charsiu's do (segmenter.py OFFSET_S), so the same correction applies. Measured
-# with scripts/calibrate_spikes.py on 93 words of Edge TTS speech, whose reported word
-# boundaries are the truth: raw MFA is +41 ms at word starts and +48 ms at ends.
-# settle_starts() later absorbs some of that, but not enough - through the whole
-# pipeline, uncorrected MFA has a mean absolute error of 34.6 ms against Charsiu's
-# 17.3 ms. Subtracting 40 ms gives 16.3 ms (start bias -8 ms, end +6 ms), the best
-# value on the sweep; 45 ms is within noise of it and 50 ms is clearly worse.
-OFFSET_S = 0.04
+# How far to move MFA's word starts earlier before cropping. On Edge TTS speech
+# (scripts/calibrate_spikes.py, 93 words) raw MFA runs late by ~41 ms at starts and
+# ~48 ms at ends, and subtracting 40 ms from both scored best. On real learner
+# recordings that did not carry over: the shifted crops clipped each word's final
+# sound and picked up the previous word's tail, and uncorrected MFA sounded better
+# (tmp/mfa-review.html). Until it is re-measured on human speech, starts are left
+# alone by default (PC_MFA_OFFSET_MS overrides it) and ends are never moved, since
+# a clipped final consonant is the most audible crop error.
+OFFSET_S = float(os.environ.get("PC_MFA_OFFSET_MS", "0")) / 1000.0
+
+
+def calibrate(spans: list[Span]) -> list[Span]:
+    """The crops the app plays from MFA's raw word intervals: starts shifted, ends kept."""
+    return [Span(max(0.0, sp.start - OFFSET_S), sp.end) for sp in spans]
 
 
 def model_fingerprints() -> dict:
@@ -67,7 +72,7 @@ def command_prefix() -> list[str]:
     executable = shutil.which("mfa")
     if executable:
         return [executable]
-    raise RuntimeError("MFA is not installed. Run launchers/setup_mfa.bat first, or activate an MFA environment.")
+    raise RuntimeError("MFA is not installed. Run launchers/setup.bat first, or activate an MFA environment.")
 
 
 def run_mfa(arguments: list[str], *, timeout: float = 300) -> subprocess.CompletedProcess:
