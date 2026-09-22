@@ -2,10 +2,11 @@
 
 Edge TTS reports the exact start and end of every word it synthesises, which
 makes a cheap ground truth. This script synthesises a few sentences, runs the
-full pipeline, and reports how far the crops are from the truth for both
-engines: the spike-based estimate (boundaries.py) and Charsiu (segmenter.py).
-It also prints where the scoring model's spikes fall inside words, which is
-where the constants in boundaries.py come from.
+full pipeline, and reports how far the crops are from the truth, both for the
+spike-based estimate (boundaries.py) and for whichever aligner actually produced
+the crops - so it also measures the calibration offsets in mfa.py and
+segmenter.py. It prints where the scoring model's spikes fall inside words too,
+which is where the constants in boundaries.py come from.
 
     uv run python scripts/calibrate_spikes.py
 """
@@ -60,7 +61,8 @@ def main() -> None:
     from pronunciationcoach.boundaries import word_spans
     from pronunciationcoach.pipeline import assess
 
-    lead, lag, spikes_err, charsiu_err = [], [], [], []
+    lead, lag, spikes_err = [], [], []
+    model_err: dict[str, list] = {}
     for k, text in enumerate(SENTENCES):
         mp3 = OUT / f"s{k}.mp3"
         truth = asyncio.run(synth(text, mp3))
@@ -73,18 +75,18 @@ def main() -> None:
             lead.append(r.emissions.frame_to_s(segs[0].start) - ts)
             lag.append(te - r.emissions.frame_to_s(segs[-1].end))
             spikes_err.append((sp_spike.start - ts, sp_spike.end - te))
-            if r.span_source == "charsiu":
-                charsiu_err.append((sp_model.start - ts, sp_model.end - te))
+            model_err.setdefault(r.span_source, []).append((sp_model.start - ts, sp_model.end - te))
 
     print(f"{len(lead)} words from {len(SENTENCES)} sentences")
     print(f"first spike starts after the true word start by: median {np.median(lead)*1000:.0f} ms (p10 {np.percentile(lead,10)*1000:.0f}, p90 {np.percentile(lead,90)*1000:.0f})")
     print(f"true word end comes after the last spike end by: median {np.median(lag)*1000:.0f} ms (p10 {np.percentile(lag,10)*1000:.0f}, p90 {np.percentile(lag,90)*1000:.0f})")
     print()
     report("spikes", spikes_err)
-    if charsiu_err:
-        report("charsiu", charsiu_err)
-    else:
-        print("charsiu  (segmenter unavailable)")
+    for source, errs in sorted(model_err.items()):
+        if source != "spikes":
+            report(source, errs)
+    if not [s for s in model_err if s != "spikes"]:
+        print("no model aligner was available")
 
 
 if __name__ == "__main__":

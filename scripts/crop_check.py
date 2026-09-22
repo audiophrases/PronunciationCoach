@@ -23,6 +23,7 @@ checked as they are, without loading any model; older ones are re-assessed.
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import sys
 from pathlib import Path
@@ -115,7 +116,10 @@ def main() -> None:
     ap.add_argument("--verbose", action="store_true")
     ap.add_argument("--rerun", action="store_true", help="re-assess with the current code even when crops are archived")
     ap.add_argument("--rechunk", action="store_true", help="audit current playback groups from archived audio and word crops")
+    ap.add_argument("--no-mfa", action="store_true", help="re-assess with the built-in cropper so the audit starts no aligner")
     args = ap.parse_args()
+    if args.no_mfa:
+        os.environ["PC_MFA"] = "0"
 
     from pronunciationcoach.audio import load_audio
     from pronunciationcoach.boundaries import SAMPLE_RATE, SPIKE_LAG_S, energy_db, speech_threshold

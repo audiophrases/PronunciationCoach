@@ -135,19 +135,19 @@ def test_locate_words_retains_evidence_without_another_model_call(evidence, monk
     phones = [SimpleNamespace(phones=["A"]), SimpleNamespace(phones=["B"])]
     segments = [Segment("A", 1, 12, 17, .9), Segment("B", 2, 27, 35, .9)]
     retained = []
-    spans, source, _ = pipeline.locate_words(np.ones(16000, dtype=np.float32), phones, words, segments, [], 20., retained)
+    spans, source, _, _ = pipeline.locate_words(np.ones(16000, dtype=np.float32), phones, words, segments, [], 20., retained)
     assert source == "charsiu" and len(retained) == 1 and len(spans) == 2
     recheck_chunks(chunks(), retained[0], 1., [False]*2)
     assert calls == [16000]
 
 
-def test_failed_baseline_alignment_leaves_no_recheck_evidence(evidence, monkeypatch):
+def test_failed_mfa_and_charsiu_leaves_no_recheck_evidence(evidence, monkeypatch):
     from types import SimpleNamespace
     from pronunciationcoach import pipeline, segmenter
     from pronunciationcoach.align import Segment
     from pronunciationcoach.scoring import PhoneScore, WordScore
     monkeypatch.setattr(segmenter, "get_segmenter", lambda: (_ for _ in ()).throw(RuntimeError("offline")))
     retained = []
-    spans, source, _ = pipeline.locate_words(np.ones(16000, dtype=np.float32), [SimpleNamespace(phones=["a"])],
+    spans, source, _, _ = pipeline.locate_words(np.ones(16000, dtype=np.float32), [SimpleNamespace(phones=["a"])],
         [WordScore("one", [PhoneScore("a", .24, .34, 0., .9, "a")])], [Segment("a", 1, 12, 17, .9)], [], 20., retained)
     assert source == "spikes" and len(spans) == 1 and retained == []

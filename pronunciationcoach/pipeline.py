@@ -38,8 +38,9 @@ class Assessment:
     emissions: Emissions
     audio: np.ndarray  # the 16 kHz mono signal that was scored
     spans: list[Span] = field(default_factory=list)  # where each word is, for replay
-    span_source: str = "spikes"  # "charsiu" (frame aligner) or "spikes" (fallback)
+    span_source: str = "spikes"  # "mfa", "charsiu" (frame aligner) or "spikes" (fallback)
     span_cases: list[str] = field(default_factory=list)  # how each start was settled: onset / dip / join
+    span_reject: str = ""  # why MFA was not used, when it was not
     reference_voices: list[str] = field(default_factory=list)  # native renderings the scorer listened to
     unknown_phones: list[str] = field(default_factory=list)  # expected phones the model has no label for
     timings: dict[str, float] = field(default_factory=dict)
@@ -156,9 +157,15 @@ def assess(
     timings["score"] = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    crop_evidence: list[CropEvidence] = []
-    spans, span_source, span_cases = locate_words(audio, word_phones, words, segments, extra, em.frame_ms, crop_evidence)
+    # A word the learner never said gives MFA nothing to align, so this has to be
+    # known before the crops are chosen, not after them.
     dropped_words = [bool(w.phones) and all(p.dropped for p in w.phones) and not w.insertions for w in words]
+    crop_evidence: list[CropEvidence] = []
+    recheck_mode = os.environ.get("PC_CROP_RECHECK", "0").lower()
+    spans, span_source, span_cases, span_reject = locate_words(
+        audio, word_phones, words, segments, extra, em.frame_ms, crop_evidence,
+        dropped_words=dropped_words, timings=timings,
+        want_evidence=recheck_mode != "0")  # an audit still needs Charsiu's evidence
     spans = safe_spans(spans, duration_s(audio), dropped_words)
     timings["crop"] = time.perf_counter() - t0
 
@@ -168,8 +175,10 @@ def assess(
                           enabled=os.environ.get("PC_CHUNKS", "1") != "0")
     timings["chunk"] = time.perf_counter() - t0
 
+    # Retired from normal processing: across 24 archived playback groups the second
+    # pass accepted no correction at all, for 2.7-9.9 s per assessment. It stays
+    # available as an audit (PC_CROP_RECHECK=audit) and its modules are unchanged.
     t0 = time.perf_counter()
-    recheck_mode = os.environ.get("PC_CROP_RECHECK", "1").lower()
     crop_checks = []
     transcript_checks = []
     if recheck_mode != "0" and crop_evidence:
@@ -190,9 +199,15 @@ def assess(
             suspicious={c.chunk for c in crop_checks},
             protected={i for i, w in enumerate(words) if dropped_words[i] or w.insertions},
             apply=recheck_mode != "audit")
+        # Say which halves actually ran: recheck_chunks needs Charsiu's evidence, and
+        # reporting "apply" when only the verifier ran made past audits incomparable.
         recheck_mode = "audit" if recheck_mode == "audit" else "apply"
+        if not crop_evidence:
+            recheck_mode += " (verify only)"
+    elif recheck_mode == "0":
+        recheck_mode = "retired"
     else:
-        recheck_mode = "disabled" if recheck_mode == "0" else "listener-unavailable"
+        recheck_mode = "listener-unavailable"
     timings["crop_recheck"] = time.perf_counter() - t0
 
     return Assessment(
@@ -209,6 +224,7 @@ def assess(
         spans=spans,
         span_source=span_source,
         span_cases=span_cases,
+        span_reject=span_reject,
         reference_voices=list(ref.renderings) if ref else [],
         unknown_phones=unknown,
         timings=timings,
@@ -282,11 +298,62 @@ def attach_insertions(words, word_phones, segments, extra, em, audio) -> list:
     return remaining
 
 
+# MFA aligns the whole utterance against the sentence, which is the best crop available
+# when the learner really did read that sentence. It cannot report that they did not:
+# forced alignment always emits an interval for every transcript word, so an omitted or
+# reordered word does not raise - it silently shifts its neighbours (measured: up to
+# 250 ms, enough that tapping "like" plays "my"). These gates, not MFA's own errors, are
+# what decide whether its answer is usable.
+MFA_ANCHOR_TOL_S = 0.15  # |MFA start - spike onset|; <=90 ms on 67 good words, 250 ms on an omission
+
+
+def mfa_reject_reason(words, word_phones, extra, dropped_words: list[bool] | None) -> str:
+    """Why MFA must not be asked for these crops, or "" when it can be.
+
+    Each case is one where the sentence is not what was actually said, and forced
+    alignment would answer confidently anyway. Charsiu's wildcard state handles
+    them; it is cheaper to check here than to align and then distrust the result.
+    """
+    if os.environ.get("PC_MFA", "1") == "0":
+        return "disabled"
+    if not word_phones:
+        return "no words"
+    if dropped_words and any(dropped_words):
+        return "a word was not said"
+    if any(w.understood is False for w in words):
+        return "a word was not recognised"
+    if any(w.insertions for w in words):
+        return "an inserted vowel has no dictionary entry"
+    if any(len(run.phones) >= 2 for run in extra):
+        return "speech outside the sentence"
+    from . import mfa
+
+    spelling = [getattr(wp, "word", "") for wp in word_phones]
+    if not all(spelling):
+        return "no spelling to align against"
+    known = mfa.lexicon()
+    unknown = [word for word in spelling if known and word.lower() not in known]
+    if unknown:
+        return f"not in the dictionary: {' '.join(unknown[:3])}"
+    return ""
+
+
+def mfa_spans(audio, words_to_align: list[str], duration: float) -> list[Span]:
+    """Word crops from the warm MFA worker, calibrated. Raises if MFA cannot be used."""
+    from . import mfa
+    from .mfa_worker import align
+
+    reply, _ = align(audio, " ".join(words_to_align))
+    spans = mfa.word_spans(reply, words_to_align, reply.get("duration", duration))
+    return [Span(max(0.0, sp.start - mfa.OFFSET_S), max(0.0, sp.end - mfa.OFFSET_S)) for sp in spans]
+
+
 def locate_words(audio, word_phones, words, segments, extra, frame_ms,
-                 evidence: list[CropEvidence] | None = None) -> tuple[list[Span], str, list[str]]:
-    """Word crops from Charsiu's frame aligner, anchored to the scoring aligner's spikes so
-    repeats and hesitations (the wildcard runs) cannot be swallowed by a neighbouring word.
-    Falls back to the spike-based estimate if the aligner is unavailable."""
+                 evidence: list[CropEvidence] | None = None, dropped_words: list[bool] | None = None,
+                 timings: dict | None = None, want_evidence: bool = False) -> tuple[list[Span], str, list[str], str]:
+    """Word crops from MFA, falling back to Charsiu's frame aligner and then to the
+    scoring aligner's spikes. Every source is anchored to those spikes so that repeats
+    and hesitations cannot be swallowed by a neighbouring word."""
     by_word, cursor = [], 0
     for w in words:
         by_word.append(segments[cursor : cursor + len(w.phones)])
@@ -308,7 +375,8 @@ def locate_words(audio, word_phones, words, segments, extra, frame_ms,
         return ([p.heard for p in w.insertions if p.inserted == "before"] + list(word_phones[i].phones)
                 + [p.heard for p in w.insertions if p.inserted == "after"])
 
-    try:
+    def charsiu() -> tuple[list[Span], list[str]]:
+        """Charsiu's crops, and the evidence the audit pass reads."""
         from .segmenter import get_segmenter, to_arpabet
 
         seg = get_segmenter()
@@ -325,17 +393,48 @@ def locate_words(audio, word_phones, words, segments, extra, frame_ms,
         phones = [to_arpabet(pronounced(i)) for i in range(len(by_word))]
         log_probs = seg.frame_log_probs(audio)
         raw_spans = seg.align(log_probs, phones, windows, extras)
-        spans = raw_spans
-        spans, cases = settle_starts(spans, [kept(i) for i in range(len(by_word))], audio, frame_s)
+        spans, cases = settle_starts(raw_spans, [kept(i) for i in range(len(by_word))], audio, frame_s)
         if evidence is not None:
             evidence.append(CropEvidence(seg, log_probs, phones, windows, raw_spans,
                                         [Span(kept(i)[0].start * frame_s, kept(i)[-1].end * frame_s)
                                          for i in range(len(by_word))],
                                         [(r.start * frame_s, r.end * frame_s) for r in extra]))
-        return spans, "charsiu", cases
+        return spans, cases
+
+    log = logging.getLogger("pronunciationcoach")
+    reject = mfa_reject_reason(words, word_phones, extra, dropped_words)
+    if not reject:
+        t0 = time.perf_counter()
+        try:
+            spans = mfa_spans(audio, [wp.word for wp in word_phones], len(audio) / SAMPLE_RATE)
+            # MFA has no wildcard state, so a hesitation after a word is absorbed into it
+            # (measured: a 1.30 s crop for "So"). Its own spikes bound how far it can run.
+            for i, sp in enumerate(spans):
+                sp.end = max(sp.start, min(sp.end, kept(i)[-1].end * frame_s + WINDOW_AFTER_S))
+            late = [abs(sp.start - (kept(i)[0].start * frame_s - SPIKE_LAG_S)) for i, sp in enumerate(spans)]
+            if max(late, default=0.0) > MFA_ANCHOR_TOL_S:
+                # One shifted word moves every boundary after it, so this is all or nothing.
+                reject = f"disagrees with the spikes by {max(late) * 1000:.0f} ms"
+            else:
+                if timings is not None:
+                    timings["mfa"] = time.perf_counter() - t0
+                if want_evidence:
+                    try:
+                        charsiu()  # audit only: MFA keeps the crops, Charsiu supplies the evidence
+                    except Exception as exc:
+                        log.warning("no Charsiu evidence for the audit pass (%s)", exc)
+                spans, cases = settle_starts(spans, [kept(i) for i in range(len(by_word))], audio, frame_s)
+                return spans, "mfa", cases, ""
+        except Exception as exc:  # worker missing, timed out, or transcript mismatch
+            reject = str(exc)
+        log.info("MFA not used (%s); falling back", reject)
+
+    try:
+        spans, cases = charsiu()
+        return spans, "charsiu", cases, reject
     except Exception as exc:  # model not downloadable, out of memory, ...
-        logging.getLogger("pronunciationcoach").warning("Charsiu segmenter unavailable (%s); using spike-based crops", exc)
-    return word_spans(audio, by_word, dropped, frame_ms), "spikes", []
+        log.warning("Charsiu segmenter unavailable (%s); using spike-based crops", exc)
+    return word_spans(audio, by_word, dropped, frame_ms), "spikes", [], reject
 
 
 # Where exactly does a word start? Two estimates disagree in opposite ways. Charsiu's frame

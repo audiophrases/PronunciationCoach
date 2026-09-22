@@ -12,10 +12,11 @@ from pronunciationcoach.scoring import PhoneScore, WordScore
 
 
 @pytest.mark.parametrize("mode,listener,should_call,should_apply", [
-    (None, True, True, True), ("audit", True, True, False),
-    ("0", True, False, False), (None, False, False, False),
+    (None, True, False, False), ("1", True, True, True), ("audit", True, True, False),
+    ("0", True, False, False), ("1", False, False, False),
 ])
-def test_assess_routes_verification_with_independent_scoring_anchors(monkeypatch, mode, listener, should_call, should_apply):
+def test_assess_leaves_the_second_pass_off_by_default_and_routes_anchors_when_asked(
+        monkeypatch, mode, listener, should_call, should_apply):
     from pronunciationcoach import pipeline
     monkeypatch.setenv("PC_NATIVE_REF", "0")
     monkeypatch.setenv("PC_LISTENER", "1" if listener else "0")
@@ -36,7 +37,7 @@ def test_assess_routes_verification_with_independent_scoring_anchors(monkeypatch
     monkeypatch.setattr(pipeline, "attach_insertions", lambda *_: [])
     # Simulate Charsiu being unavailable: verification must still receive the
     # phoneme scorer's anchors instead of silently dropping target protection.
-    monkeypatch.setattr(pipeline, "locate_words", lambda *_: ([Span(.1, .45)], "spikes", []))
+    monkeypatch.setattr(pipeline, "locate_words", lambda *a, **k: ([Span(.1, .45)], "spikes", [], "no mfa"))
     calls = []
 
     def verify(chunks, audio, heard, **kwargs):

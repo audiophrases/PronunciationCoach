@@ -40,25 +40,45 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   offline). The input row is just the recorder, the sentence box and the check button; the target
   accent and model voice pickers sit with everything technical in a collapsed
   "Technical details (for teachers)" section: timeline, IPA, per-phone table, posterior heatmap.
-* **Word crops** – a second, small model does the cropping: Charsiu's frame-level phonetic
-  aligner (`charsiu/en_w2v2_fc_10ms`, ~380 MB) labels every 10 ms with a phone or silence, and a
-  Viterbi (`segmenter.py`) fits the expected words to it, anchored to the scoring model's spikes so
-  repeats and hesitations are excluded. Each word's *start* is then settled with the audio as the
-  referee (`settle_starts` in `pipeline.py`), because the two estimates fail in opposite ways:
-  Charsiu runs late on quiet onsets (a stop's closure, a fricative, *h*, a nasal) and hands them to
-  the previous word, while the spike-based onset can reach back into the previous word's vowel -
-  and the previous word's own last spike may fire after our first sound has begun, so it is no
-  floor either. Three cases: **onset** (silence before the word: start where sound resumes, e.g.
-  at a k's burst), **dip** (the word starts with a quiet consonant after a vowel and the energy
-  shows the valley Charsiu skipped, its rise at Charsiu's boundary: start at the valley), **join**
-  (anything else, including a consonant that belongs to the previous word: Charsiu's boundary,
-  never later than the spike allows). Each decision is logged (`crops (charsiu): can 0.59-0.88
-  onset | ...`) and archived with the recording. `scripts/crop_check.py` audits archived recordings
-  without loading any model: per word, ms of the first sound cut, of the previous/next word
-  included, of the last sound cut, and edge silence. Using Edge TTS word-boundary
-  timing metadata, `scripts/calibrate_spikes.py` measures synthetic crop differences; these are not
-  human-annotated learner-speech accuracy measurements. If Charsiu is unavailable
-  the spike-based estimate in `boundaries.py` is used instead.
+* **Word crops** – the [Montreal Forced Aligner](https://montreal-forced-aligner.readthedocs.io)
+  aligns the whole utterance against the sentence and reports where each word is. It runs in a
+  resident worker (`mfa_worker.py`) that loads the acoustic model and lexicon once: an alignment
+  then takes about 25-95 ms, against ~16 s for a fresh `mfa align_one`, and the output is
+  identical. The worker also avoids a real hazard - MFA unpacks its 50 MB model into a shared
+  directory on every start, so two concurrent runs corrupt each other - by unpacking once, into
+  its own directory, and serving requests one at a time.
+
+  Forced alignment cannot report that the learner did not read the sentence: it emits an interval
+  for every word of the transcript whatever was actually said, so an omitted word does not raise,
+  it silently shifts its neighbours (measured at up to 250 ms - enough that tapping *like* plays
+  *my*). MFA is therefore asked only when the sentence is trustworthy, and its answer is checked
+  afterwards. It is skipped when a word was not said, was not recognised by the listener, carries
+  an inserted vowel, when speech was heard outside the sentence, or when a word is not in the
+  dictionary; its answer is discarded whole if any word's start disagrees with the scoring model's
+  spikes by more than 150 ms. Rejection is all-or-nothing, because one shifted word moves every
+  boundary after it. Each word's end is also capped at its own last spike plus 250 ms, since MFA
+  has no wildcard state and otherwise absorbs a following hesitation (measured: a 1.30 s crop for
+  *So*). Whenever MFA is not used, the reason is logged and shown in the technical panel, and
+  Charsiu's frame-level aligner (`charsiu/en_w2v2_fc_10ms`, ~380 MB, `segmenter.py`) does the
+  cropping instead; if that is unavailable too, the spike-based estimate in `boundaries.py` is.
+
+  Both aligners run late against ground truth by a near-constant amount, so both subtract a
+  measured calibration offset (`OFFSET_S`, 40 ms in both `mfa.py` and `segmenter.py`).
+  Each word's *start* is then settled with the audio as the referee (`settle_starts` in
+  `pipeline.py`), because the aligner and the spikes fail in opposite ways: the aligner runs late
+  on quiet onsets (a stop's closure, a fricative, *h*, a nasal) and hands them to the previous
+  word, while the spike-based onset can reach back into the previous word's vowel - and the
+  previous word's own last spike may fire after our first sound has begun, so it is no floor
+  either. Three cases: **onset** (silence before the word: start where sound resumes, e.g. at a
+  k's burst), **dip** (the word starts with a quiet consonant after a vowel and the energy shows
+  the valley the aligner skipped, its rise at the aligner's boundary: start at the valley),
+  **join** (anything else, including a consonant that belongs to the previous word: the aligner's
+  boundary, never later than the spike allows). Each decision is logged (`crops (mfa): can
+  0.59-0.88 onset | ...`) and archived with the recording. `scripts/crop_check.py` audits archived
+  recordings without loading any model: per word, ms of the first sound cut, of the previous/next
+  word included, of the last sound cut, and edge silence. `scripts/calibrate_spikes.py` measures
+  crops against Edge TTS word-boundary metadata, which is where the calibration offsets come from;
+  these are synthetic-speech measurements, not human-annotated learner-speech accuracy.
   Playback clips take the recording at its original rate and add up to 60/50 ms of room on either
   side **only through quiet audio** (silence, a closure, breath - never a neighbour's vowel), with
   10 ms fades and a level boost, then follow the speed slider.
@@ -83,34 +103,27 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   membership and reasons. `scripts/crop_check.py --rechunk` audits archived recordings without
   model inference (old archives assume 20 ms scoring frames). Set `PC_CHUNKS=0` to compare with
   individual-word playback; no new model or dependency is needed.
-* **Detect, trim, recheck** – the existing Whisper listener now hears rendered playback crops
-  and compares them with the intended group text. For example, a crop intended as **I** that
-  contains a timed **if I** can lose the extra **if**. The extra words must also be recognized
-  at the same position in the full recording, with overlapping acoustic intervals. A proposed
-  trim must retain the target's scoring-model phone anchors, and the adjusted playback must
-  transcribe as exactly the intended words before the change is accepted. The target text is
-  never supplied as an ASR prompt. Substitutions, internal extras, omissions and ambiguous repeats
-  are kept for pronunciation feedback. Zero-duration invented words cannot justify a trim.
-  Cropped extras use the listener's existing hesitant threshold (0.3); sentence-level corroboration
-  requires its understood threshold (0.6). Isolated target-word confidence is recorded rather than
-  treated as a calibrated correctness score.
-  Corrections are enabled by default (`PC_CROP_RECHECK=1`); `audit` records proposals without
-  applying them, and `0` disables both checks. The earlier Charsiu search now provides diagnostic
-  evidence only. No new models or dependencies are added, but extra recognizer calls add latency.
-  At most eight crops of up to three seconds are checked, prioritizing suspect boundaries, with at
-  most two trim/recheck attempts each. Isolated decoding has a 32-token output cap and no temperature
-  retries. Missing listener results or failed checks preserve existing playback; `PC_LISTENER=0`
-  disables recognition-based correction in known-text mode. Scoring anchors remain available if
-  Charsiu fails. Corrected edges disable playback padding so removed speech cannot return, while
-  scores, original word spans, grouping, accent, voice and speed controls remain unchanged.
-  Technical details, logs and recording JSON record before/after transcripts, probabilities,
-  boundaries and rejected attempts. `scripts/recheck_compare.py` runs cached-model comparisons
-  and creates a listening page; `--alignment-only` repeats the earlier alignment-only experiment.
-  Recognition matches are not a human listening evaluation, and TTS timestamps remain metadata
-  proxies rather than acoustic ground truth.
-  To review every saved crop with the app's native references enabled, run
-  `uv run python scripts/recheck_compare.py "recordings/*.json" --native-references --all-crops --output tmp/recheck-review.json`
-  and open `tmp/recheck-review.html`.
+* **Detect, trim, recheck (retired)** – a second pass used to re-transcribe each rendered
+  playback crop with the Whisper listener and trim corroborated extra words at its edges. It is
+  off by default (`PC_CROP_RECHECK=0`). On the saved recordings it accepted **no** correction at
+  all: 24 playback groups, 7 transcript matches, 10 uncertain, 7 skipped, zero trims, for 2.7-9.9
+  seconds of extra recogniser calls per assessment. The reasons were structural rather than
+  tuning - the alignment half only ever proposed outward extensions and was called with
+  `apply=False`; the operative half could only trim corroborated edge words, never restore a
+  clipped onset or move a boundary shared with the neighbouring group; and isolated recognition of
+  short clips is unreliable (*couldn't you* came back as *I can do it*, *App* as *Hah!*).
+  Cropping accuracy is now addressed at the source, by the aligner, instead.
+
+  The code and its tests are retained, and the pass can still be run for an audit:
+  `PC_CROP_RECHECK=audit` records proposals without applying them and `1` applies them, with
+  Charsiu run alongside MFA purely to supply the alignment evidence it reads. When the listener is
+  unavailable the mode is reported as `listener-unavailable`, and when only the verification half
+  could run it is reported as `apply (verify only)` rather than plain `apply`, so audits taken
+  before and after this change stay comparable. `scripts/recheck_compare.py` still runs
+  cached-model comparisons and builds a listening page:
+  `uv run python scripts/recheck_compare.py "recordings/*.json" --native-references --all-crops --output tmp/recheck-review.json`,
+  then open `tmp/recheck-review.html`. Recognition matches were never a human listening
+  evaluation, and TTS timestamps remain metadata proxies rather than acoustic ground truth.
   For two-machine comparisons, run `uv run python scripts/diagnose_setup.py` on each machine
   using the same launcher environment. New archived assessments include the same setup snapshot
   (package versions, Git revision, model names, effective settings and ffmpeg location).
@@ -189,7 +202,8 @@ uv run python app.py                  # Gradio UI on http://127.0.0.1:7860
 On Windows, install espeak-ng with `winget install eSpeak-NG.eSpeak-NG`; the code finds the
 DLL in `C:\Program Files\eSpeak NG` automatically.
 
-Memory: the phoneme model (~1.4 GB), the cropping model (~0.4 GB) and Whisper `base.en` (~1.2 GB,
+Memory: the phoneme model (~1.4 GB), the MFA worker (~0.5 GB), the fallback cropping model
+(~0.4 GB) and Whisper `base.en` (~1.2 GB,
 the listener) together need about 3.5 GB free; if Whisper cannot load, verdicts fall back to
 severity only.
 On an 8 GB machine, let Windows manage the page file size and close browser tabs you don't need.
@@ -198,7 +212,8 @@ On an 8 GB machine, let Windows manage the page file size and close browser tabs
 
 Clone the repository, double-click `launchers\setup.bat`, and the machine is ready - the same
 launchers work there. `setup.bat` installs uv, espeak-ng, ffmpeg, cloudflared and the GitHub CLI
-if missing, the Python packages, and downloads all models (~2 GB) by scoring a test sentence.
+if missing, the Python packages and the Montreal Forced Aligner, and downloads all models
+(about 2.5 GB downloaded, about 6 GB on disk) by scoring a test sentence.
 The first `share.bat` signs in to GitHub in the browser (once per machine) so it can publish the
 session address. Only one machine should share at a time - the fixed address points at whichever
 published last. If GAPhonetics is not cloned next to the coach, the sound guidance is read from
@@ -251,33 +266,42 @@ tested against. Until then, the app runs on the teacher's own machine.
 
 ## Models
 
-### Experimental MFA comparison
+### The MFA aligner
 
-Run `launchers/setup_mfa.bat` once, then `launchers/compare_mfa.bat` to open an
-audio and waveform comparison against saved `recordings/*.json` + `.wav` pairs.
-The CLI equivalent is `uv run python scripts/mfa_compare.py "recordings/*.json"`.
-Results go to `tmp/mfa-review.html` and `tmp/mfa-review.json`; each run also keeps
-MFA's raw word/phone intervals and logs in its own `tmp/mfa-trial-*` directory.
-Use `--reuse tmp/mfa-review.json` to rebuild the listening page without rerunning
-matching alignments. Input audio, transcript, MFA version and model hashes must match.
+`launchers/setup.bat` installs MFA as step 7 of 8. `launchers/setup_mfa.bat` repeats just that
+step if it failed or needs reinstalling; it is safe to re-run and takes about 6 seconds when
+everything is already in place. The coach uses MFA 3.4.2, the English acoustic model v3.1.0 and
+the **US** English dictionary v3.1.0, aligning whole utterances without speaker adaptation. The
+US dictionary is used for both the American and British accent settings: it decides where word
+boundaries fall, not how a sound is judged, and the scorer keeps its own accent-specific phones.
 
-The trial uses MFA 3.4.2, the English acoustic model v3.1.0 and the **US** English
-dictionary v3.1.0. It aligns whole utterances with `align_one`, without speaker
-adaptation. The Windows setup uses a separate `.cache/mfa-env` environment;
-`scripts/mfa-win-64.lock` pins all packages, and the model downloads are checked
-against SHA-256 hashes. Run setup on both machines; do not copy the environment.
-The first installation downloads roughly 510 MB of packages/models. The normal
-app and its Python environment are unchanged by this optional setup.
+MFA lives in its own `.cache/mfa-env` environment, separate from the app's Python packages.
+`scripts/mfa-win-64.lock` pins all 205 packages and the model downloads are checked against
+SHA-256 hashes. The first installation downloads roughly 500 MB; `.cache` then holds about 3 GB,
+most of it the package cache, which is worth keeping - re-creating the environment from it needs
+no network, which is what makes a failed install recoverable. Run setup on each machine rather
+than copying the environment.
 
-The report holds existing word groups fixed and compares individual words as
-well. Legacy archives without groups use individual words. Both sides use the
-same playback padding, fade and gain. It reports **boundary disagreement**, not
-accuracy: manually reviewed boundaries are still needed to establish improvement.
-Forced alignment can assign times to omitted words, so the trial rejects output
-token mismatches and invalid intervals, but does not treat a valid alignment as
-proof that every word was spoken. The app continues using its existing aligner
-until the trial has been reviewed. Recorded elapsed times include process/model
-startup and should not be interpreted as optimized, warm-server latency.
+If MFA cannot be installed, setup says so and continues: the coach falls back to Charsiu and
+stays usable, and running `setup.bat` again finishes the step. Set `PC_MFA=0` in
+`launchers/_env.bat` to use the built-in cropper instead.
+
+To compare crops on saved recordings, run `launchers/compare_mfa.bat`, or
+`uv run python scripts/mfa_compare.py "recordings/*.json"`, and open `tmp/mfa-review.html`.
+It plays both versions of every crop and draws the two boundary tracks over the waveform; each
+run keeps MFA's raw word/phone intervals and logs in its own `tmp/mfa-trial-*` directory, and
+`--reuse tmp/mfa-review.json` rebuilds the page without realigning. Note that it compares the
+archived crops against a fresh alignment, so for recordings archived since this change both sides
+are MFA and the differences go to zero; it is most useful on older archives and after a model
+change. It reports **disagreement**, not accuracy.
+
+What is and is not established: `scripts/calibrate_spikes.py` measures crops against Edge TTS
+word boundaries, and on 93 words of synthetic speech calibrated MFA was the most accurate of the
+three sources. That is synthetic speech and the synthesiser's own metadata, not human-annotated
+learner audio, of which there is still none. Trailing-boundary outliers remain on the saved
+recordings - *So* and a whispered *the* both ran several hundred ms long before the end cap was
+added - and the judgement that MFA crops sound better on real learner speech rests on listening,
+not on a measurement.
 
 Sources: [MFA installation](https://montreal-forced-aligner.readthedocs.io/en/latest/installation.html),
 [single-file alignment](https://montreal-forced-aligner.readthedocs.io/en/latest/user_guide/workflows/alignment.html),
@@ -290,7 +314,8 @@ Sources: [MFA installation](https://montreal-forced-aligner.readthedocs.io/en/la
 | Phoneme recogniser | `facebook/wav2vec2-lv-60-espeak-cv-ft` | Multilingual espeak-IPA labels, so non-English phones a learner produces are visible |
 | Word recogniser | faster-whisper `base.en` int8 (`PC_ASR_MODEL=small.en` on the Space) | Free-speech mode only; ctranslate2 keeps ~1.2 GB / ~2.3 GB resident for these |
 | G2P | espeak-ng (`en-us` / `en-gb`) | Same phone alphabet as the recogniser |
-| Word cropping | `charsiu/en_w2v2_fc_10ms` + `charsiu/tokenizer_en_cmu` | Frame-level phonetic aligner; downloaded on first use |
+| Word cropping | Montreal Forced Aligner 3.4.2, `english_mfa` v3.1.0 + `english_us_mfa` v3.1.0 | Installed by `setup.bat` into `.cache/mfa-env`; MIT / CC BY 4.0 |
+| Word cropping (fallback) | `charsiu/en_w2v2_fc_10ms` + `charsiu/tokenizer_en_cmu` | Frame-level phonetic aligner; downloaded on first use |
 
 ## Status
 

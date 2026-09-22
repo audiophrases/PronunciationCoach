@@ -97,12 +97,14 @@ def log_assessment(log: logging.Logger, result: Assessment, audio_16k: np.ndarra
     if result.unknown_phones:
         log.warning("expected phones without a model label: %s", result.unknown_phones)
     cases = result.span_cases or [""] * len(result.spans)
-    log.info("crops (%s): %s", result.span_source,
+    log.info("crops (%s%s): %s", result.span_source,
+             f", not mfa: {result.span_reject}" if result.span_reject else "",
              " | ".join(f"{w.word} {sp.start:.2f}-{sp.end:.2f} {case}".rstrip() for w, sp, case in zip(result.words, result.spans, cases)))
     log.info("playback: %s", " | ".join(f"[{c.text}] {c.reason}" for c in result.chunks))
-    log.info("crop recheck (%s): %s", result.crop_recheck_mode,
-             " | ".join(c.summary() for c in result.crop_checks) or "no flagged edges")
-    log.info("playback verification: %s", " | ".join(c.summary() for c in result.transcript_checks) or "not run")
+    if result.crop_recheck_mode != "retired":
+        log.info("crop recheck (%s): %s", result.crop_recheck_mode,
+                 " | ".join(c.summary() for c in result.crop_checks) or "no flagged edges")
+        log.info("playback verification: %s", " | ".join(c.summary() for c in result.transcript_checks) or "not run")
     if log.isEnabledFor(logging.DEBUG):
         for w in result.words:
             for p in w.phones:
@@ -135,6 +137,7 @@ def log_assessment(log: logging.Logger, result: Assessment, audio_16k: np.ndarra
             for w, sp, case in zip(result.words, result.spans, result.span_cases or [""] * len(result.spans))
         ],
         "span_source": result.span_source,
+        "span_reject": result.span_reject,
         "extra": [[r.phones, r.start, r.end] for r in result.extra],
         "timings": result.timings,
     }

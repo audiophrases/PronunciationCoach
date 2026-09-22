@@ -19,6 +19,9 @@ rem Whisper size for free-speech mode. base.en fits an 8 GB laptop; small.en is 
 set "PC_ASR_MODEL=base.en"
 rem Accept natural connected speech (gonna, dunno, dropped t, weak forms): 1. Set 0 for careful-reading practice.
 set "PC_CASUAL=1"
+rem Crop words with the Montreal Forced Aligner: 1. Set 0 to use the built-in cropper instead.
+rem Either way the coach falls back on its own when the sentence and the speech disagree.
+set "PC_MFA=1"
 rem ---------------------------------------------------------------------
 
 rem uv installs itself here when set up by setup.bat.

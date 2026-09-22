@@ -404,11 +404,14 @@ def run(audio, text, accent_name):
         f"Heard, text-independent: {result.heard_text}\n"
         + (f"Heard but not in the sentence: {result.extra_text()}\n" if result.extra_text() else "")
         + (f"No model label for: {' '.join(result.unknown_phones)}\n" if result.unknown_phones else "")
-        + f"Word crops: {result.span_source} · native reference: {', '.join(result.reference_voices) or 'none'}\n"
+        + f"Word crops: {result.span_source}"
+        + (f" (not MFA: {result.span_reject})" if result.span_reject else "")
+        + f" · native reference: {', '.join(result.reference_voices) or 'none'}\n"
         + "Playback: " + " | ".join(f"[{c.text}] ({c.reason})" for c in result.chunks) + "\n"
-        + f"Crop recheck: {result.crop_recheck_mode}\n"
-        + "".join(c.summary() + "\n" for c in result.crop_checks)
-        + "".join("Playback verification: " + c.summary() + "\n" for c in result.transcript_checks)
+        + (f"Crop recheck: {result.crop_recheck_mode}\n"
+           + "".join(c.summary() + "\n" for c in result.crop_checks)
+           + "".join("Playback verification: " + c.summary() + "\n" for c in result.transcript_checks)
+           if result.crop_recheck_mode != "retired" else "")
         + ("Sound guidance and clips: GAPhonetics (human US recordings; Wiktionary/Wikimedia Commons contributors, CC BY-SA 3.0 / CC0 - credits in its *-audio-sources.json)\n" if PHONETICS else "")
         + f"{result.duration_s:.1f} s of audio · {timing}"
     )
