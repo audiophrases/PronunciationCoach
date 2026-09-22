@@ -37,6 +37,7 @@ PHONETICS = get_phonetics()  # GAPhonetics: how to make each sound (None when un
 IPA_COLORS = {"good": "#2e8b57", "unsure": "#e0a800", "off": "#c0392b"}
 
 CSS = """
+.gradio-container { overflow: clip !important; }
 #sentence .textfield { line-height: 2.9; font-size: 1.55rem; }
 #sentence .token.highlighted { padding: .38rem .75rem; border-radius: .75rem; margin: 0 .12rem;
     cursor: pointer; font-weight: 600; transition: transform .08s; }
@@ -52,7 +53,15 @@ CSS = """
 .score-card .headline { font-size: 1.05rem; font-weight: 600; margin-bottom: .2rem; }
 .hint { opacity: .7; font-size: .9rem; }
 #review-columns { align-items: flex-start; }
-#word-column { position: sticky; top: 1rem; }
+#review, #review-columns { overflow: visible; }
+#word-column { position: sticky; top: 1rem; max-height: calc(100dvh - 2rem); overflow-y: auto; }
+#chunk-map { display: none; }
+#sentence { position: relative; }
+#sentence .token.coach-chunk-start { margin-left: .45rem; }
+#sentence .token.coach-chunk-end { margin-right: .45rem; }
+.coach-chunk-frame { position: absolute; border: 1px solid var(--body-text-color-subdued);
+    border-radius: 1rem; pointer-events: none; opacity: .5; }
+.coach-chunk-frame.active { border: 2px solid var(--color-accent); opacity: 1; }
 #word-panel { padding: 1rem; border: 1px solid var(--border-color-primary); border-radius: 1rem;
     background: var(--block-background-fill); }
 #word-column:has(#word-panel) #word-placeholder { display: none; }
@@ -62,7 +71,7 @@ CSS = """
 @media (max-width: 767px) {
     #review-columns { flex-direction: column; }
     #review-columns > .column { width: 100%; }
-    #word-column { position: static; min-width: 0 !important; }
+    #word-column { position: static; min-width: 0 !important; max-height: none; overflow: visible; }
     #word-placeholder { display: none; }
     #review:has(#word-panel) { padding-bottom: 55dvh; }
     #word-panel { position: fixed; bottom: 0; left: 0; right: 0; z-index: 50;
@@ -78,12 +87,74 @@ CSS = """
 REVIEW_JS = """() => {
     if (window.coachSelectionInstalled) return;
     window.coachSelectionInstalled = true;
+    let scheduled = false;
+    const drawChunks = () => {
+        scheduled = false;
+        const sentence = document.getElementById('sentence');
+        const map = document.querySelector('#chunk-map [data-chunks]');
+        if (!sentence || !map) return;
+        const tokens = [...sentence.querySelectorAll('.token.highlighted')];
+        const chunks = JSON.parse(map.dataset.chunks);
+        tokens.forEach(token => token.classList.remove('coach-chunk-start', 'coach-chunk-end'));
+        chunks.filter(c => c.length > 1).forEach(members => {
+            tokens[members[0]]?.classList.add('coach-chunk-start');
+            tokens[members.at(-1)]?.classList.add('coach-chunk-end');
+        });
+        let layer = sentence.querySelector('.coach-chunk-frames');
+        if (!layer) {
+            layer = document.createElement('div');
+            layer.className = 'coach-chunk-frames';
+            layer.setAttribute('aria-hidden', 'true');
+            sentence.append(layer);
+        }
+        const origin = sentence.getBoundingClientRect();
+        const frames = [];
+        chunks.filter(c => c.length > 1).forEach(members => {
+            const rows = [];
+            const active = members.some(i => tokens[i]?.classList.contains('coach-selected'));
+            members.forEach(i => {
+                if (!tokens[i]) return;
+                tokens[i].title = 'Plays together: ' + members.map(j => tokens[j]?.textContent.trim()).join(' ');
+                const rect = tokens[i].getBoundingClientRect();
+                let row = rows.find(r => Math.abs(r.top - rect.top) < 4);
+                if (!row) rows.push(row = {top: rect.top, bottom: rect.bottom, left: rect.left, right: rect.right,
+                    first: i === members[0], last: false});
+                row.last = i === members.at(-1);
+                row.left = Math.min(row.left, rect.left);
+                row.right = Math.max(row.right, rect.right);
+                row.bottom = Math.max(row.bottom, rect.bottom);
+            });
+            rows.forEach(row => {
+                const frame = document.createElement('div');
+                frame.className = 'coach-chunk-frame' + (active ? ' active' : '');
+                Object.assign(frame.style, {left: `${row.left - origin.left - 5}px`,
+                    top: `${row.top - origin.top - 5}px`, width: `${row.right - row.left + 10}px`,
+                    height: `${row.bottom - row.top + 10}px`});
+                // Open ends show that a phrase continues on the next/previous line.
+                if (!row.first) Object.assign(frame.style, {borderLeft: 'none', borderTopLeftRadius: 0, borderBottomLeftRadius: 0});
+                if (!row.last) Object.assign(frame.style, {borderRight: 'none', borderTopRightRadius: 0, borderBottomRightRadius: 0});
+                frames.push(frame);
+            });
+        });
+        layer.replaceChildren(...frames);
+    };
+    const schedule = () => {
+        if (!scheduled) { scheduled = true; requestAnimationFrame(drawChunks); }
+    };
+    new MutationObserver(changes => {
+        if (changes.some(c => !c.target.closest?.('.coach-chunk-frames') &&
+            [...c.addedNodes, ...c.removedNodes].some(n => !n.classList?.contains('coach-chunk-frames')))) schedule();
+    }).observe(document.body, {childList: true, subtree: true});
+    new ResizeObserver(schedule).observe(document.querySelector('.gradio-container'));
+    window.addEventListener('resize', schedule);
+    document.fonts.ready.then(schedule);
     const selectWord = (event) => {
         if (event.type === 'keydown' && !['Enter', ' '].includes(event.key)) return;
         const token = event.target.closest('#sentence .token.highlighted');
         if (!token) return;
         document.querySelectorAll('#sentence .coach-selected').forEach(el => el.classList.remove('coach-selected'));
         token.classList.add('coach-selected');
+        schedule();
     };
     document.addEventListener('click', selectWord);
     document.addEventListener('keydown', selectWord);
@@ -354,6 +425,7 @@ def run(audio, text, accent_name):
         ipa_hl,
         rows,
         posterior_heatmap(result.emissions, result.segments),
+        '<span data-chunks="' + escape(json.dumps([c.members for c in result.chunks]), quote=True) + '"></span>',
     )
 
 
@@ -504,6 +576,7 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
                 text = gr.Textbox(label="Sentence you are reading (optional)",
                                   placeholder="Leave empty to just talk", lines=2)
                 button = gr.Button("Check my pronunciation", variant="primary", size="md")
+                processing = gr.HTML("", elem_id="assessment-status")
 
     with gr.Column(visible=False, elem_id="review") as review:
         with gr.Row(elem_id="review-toolbar"):
@@ -520,7 +593,8 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
                     show_inline_category=False,
                     elem_id="sentence",
                 )
-                gr.Markdown("Tap a word for feedback and your recording. Tap again to hear the model.")
+                chunk_map = gr.HTML(elem_id="chunk-map")
+                gr.Markdown("Framed words play together. Tap a word for feedback and your recording. Tap again to hear the model.")
                 with gr.Row():
                     btn_you = gr.Button("▶ Whole recording", size="sm")
                     btn_model = gr.Button("▶ Whole model", size="sm")
@@ -571,11 +645,19 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
         plot = gr.Plot(label="Phone posteriors over time")
 
     state = gr.State()
-    check = button.click(
+    started = button.click(
+        lambda: (gr.update(value="Processing…", interactive=False),
+                 '<p role="status" aria-live="polite"><strong>Processing your recording… Please wait.</strong></p>'),
+        outputs=[button, processing], queue=False,
+    )
+    check = started.then(
         run,
         [audio, text, accent],
-        [card, note, words_hl, state, player, word_panel, tech_text, timeline, ipa_hl, table, plot],
+        [card, note, words_hl, state, player, word_panel, tech_text, timeline, ipa_hl, table, plot, chunk_map],
     )
+    for finished in (check.success, check.failure):
+        finished(lambda: (gr.update(value="Check my pronunciation", interactive=True), ""),
+                 outputs=[button, processing], queue=False)
     check.success(
         lambda: (gr.update(open=False, label="Recording & sentence · Edit"), gr.update(visible=True)),
         outputs=[setup, review],
@@ -588,12 +670,17 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
     demo.load(fn=None, js=REVIEW_JS)
     words_hl.select(pick_word, [state, speed, voice], [word_panel, word_head, word_tips, player, state, guide_panel, sound_pick, guide_md])
     sound_pick.change(pick_sound, [sound_pick, state], [guide_md])
-    btn_guide_sound.click(play_guide_sound, [sound_pick, state], [player])
-    btn_guide_word.click(play_guide_word, [sound_pick, state], [player])
-    btn_you.click(play_you, [state, speed], [player])
-    btn_model.click(play_model, [state, speed, voice], [player])
-    btn_word_you.click(play_word_you, [state, speed], [player, state, word_head])
-    btn_word_model.click(play_word_model, [state, speed, voice], [player, state, word_head])
+    # Clear the component first: identical cached audio otherwise does not retrigger autoplay.
+    for control, fn, inputs, outputs in [
+        (btn_guide_sound, play_guide_sound, [sound_pick, state], [player]),
+        (btn_guide_word, play_guide_word, [sound_pick, state], [player]),
+        (btn_you, play_you, [state, speed], [player]),
+        (btn_model, play_model, [state, speed, voice], [player]),
+        (btn_word_you, play_word_you, [state, speed], [player, state, word_head]),
+        (btn_word_model, play_word_model, [state, speed, voice], [player, state, word_head]),
+    ]:
+        control.click(lambda: None, outputs=[player], queue=False, show_progress="hidden").then(
+            fn, inputs, outputs, show_progress="hidden")
 
 if __name__ == "__main__":
     log.info(

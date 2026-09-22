@@ -48,6 +48,11 @@ def test_selection_plays_pairs_but_keeps_word_colors_tips_and_original_sample_ra
     assert [w["chunk"] for w in state["words"]] == [0, 0, 1, 1]
     assert [entry[1] for entry in result[2][::2]] == [w["band"] for w in state["words"]]
     assert state["words"][0]["band"] != state["words"][1]["band"]
+    # The visible frames use the same membership as both playback handlers.
+    from html import unescape
+    import re
+    rendered_members = json.loads(unescape(re.search(r'data-chunks="([^"]+)"', result[11]).group(1)))
+    assert rendered_members == [chunk["members"] for chunk in state["chunks"]]
     assert all(len(row) == 9 for row in result[9])  # technical table includes playback pair
     calls = []
     monkeypatch.setattr(app, "model_audio", lambda *args: calls.append(args) or "model.mp3")
