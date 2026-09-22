@@ -101,19 +101,6 @@ def build_chunks(text: str, words: list[str], spans: list[Span], audio: np.ndarr
         hi = min(len(db), max(lo + 1, int(np.ceil(b / step))))
         return db[lo:hi]
 
-    energy = [float(np.percentile(levels(sp.start, sp.end), 75)) for sp in spans]
-    strong = []
-    for i, sp in enumerate(spans):
-        neighbors = [energy[j] for j in (i - 1, i + 1) if 0 <= j < n and live[j]]
-        strong.append(live[i] and sp.duration >= STRONG_S - EPS and
-                      bool(neighbors) and energy[i] >= max(neighbors) - 3.0)
-
-    def auxiliary(i):
-        return lower[i] in AUXILIARIES or (lower[i] in AMBIGUOUS_VERBS and i + 1 < n and
-                                           lower[i + 1] in SUBJECTS | {"to", "not", "been", "got"})
-
-    function = [w in FUNCTION_WORDS or auxiliary(i) for i, w in enumerate(lower)]
-    weak = [candidate and not strong[i] for i, candidate in enumerate(function)]
     barriers = []
     for i in range(n - 1):
         separator = text[matches[i].end():matches[i + 1].start()] if matched else ""
@@ -140,6 +127,22 @@ def build_chunks(text: str, words: list[str], spans: list[Span], audio: np.ndarr
         else:
             barriers.append("")
 
+    energy = [float(np.percentile(levels(sp.start, sp.end), 75)) for sp in spans]
+    strong = []
+    for i, sp in enumerate(spans):
+        neighbors = [energy[j] for j in (i - 1, i + 1) if 0 <= j < n and live[j]]
+        # A word before a pause is lengthened whether or not it is stressed ("kind of...
+        # gets": a 370 ms "of"), so its duration is no evidence of emphasis there.
+        phrase_final = i < n - 1 and barriers[i] == "pause"
+        strong.append(live[i] and not phrase_final and sp.duration >= STRONG_S - EPS and
+                      bool(neighbors) and energy[i] >= max(neighbors) - 3.0)
+
+    def auxiliary(i):
+        return lower[i] in AUXILIARIES or (lower[i] in AMBIGUOUS_VERBS and i + 1 < n and
+                                           lower[i + 1] in SUBJECTS | {"to", "not", "been", "got"})
+
+    function = [w in FUNCTION_WORDS or auxiliary(i) for i, w in enumerate(lower)]
+    weak = [candidate and not strong[i] for i, candidate in enumerate(function)]
     candidates: list[tuple[int, str]] = []
     for i in range(n - 1):
         j = i + 1

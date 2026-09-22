@@ -50,6 +50,16 @@ def test_emphasized_function_word_stays_separate():
     assert len(chunks("we CAN go", "we CAN go", [(.2, .3), (.3, .7), (.7, .95)])) == 3
 
 
+def test_a_function_word_lengthened_before_a_pause_is_not_emphasis():
+    """Recorded 'kind of ... gets': 'of' was 370 ms and loud only because it preceded a 1.1 s pause."""
+    x = audio(3)
+    x[int(1.0 * SAMPLE_RATE):int(2.1 * SAMPLE_RATE)] = 0
+    result = build_chunks("kind of gets", "kind of gets".split(),
+                          [Span(.2, .63), Span(.63, 1.0), Span(2.1, 2.5)], x)
+    assert [c.text for c in result] == ["kind of", "gets"]
+    assert result[0].reason == "connected pair"
+
+
 def test_main_verb_can_host_a_pronoun_and_a_quiet_slow_auxiliary_can_pair():
     assert [c.text for c in chunks("I have books", "I have books", [(.2, .35), (.35, .75), (.75, 1.)])] == ["I have", "books"]
     samples = audio()
