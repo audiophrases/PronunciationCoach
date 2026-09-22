@@ -172,7 +172,7 @@ def assess(
     t0 = time.perf_counter()
     chunks = build_chunks(text, [w.word for w in words], spans, audio, dropped_words,
                           [(r.start * em.frame_ms / 1000, r.end * em.frame_ms / 1000) for r in extra],
-                          enabled=os.environ.get("PC_CHUNKS", "1") != "0")
+                          enabled=os.environ.get("PC_CHUNKS", "1") != "0", sounds=edge_sounds(words))
     timings["chunk"] = time.perf_counter() - t0
 
     # Retired from normal processing: across 24 archived playback groups the second
@@ -342,6 +342,18 @@ def mfa_reject_reason(words, word_phones, extra, dropped_words: list[bool] | Non
     if unknown:
         return f"not in the dictionary: {' '.join(unknown[:3])}"
     return ""
+
+
+def edge_sounds(words) -> list[tuple[str, str]]:
+    """Each word's first and last sound as pronounced: dropped phones are skipped and
+    an inserted vowel counts, since that is what links (or fails to link) to a neighbour."""
+    out = []
+    for w in words:
+        said = ([p.heard for p in w.insertions if p.inserted == "before"]
+                + [p.expected for p in w.phones if not p.dropped]
+                + [p.heard for p in w.insertions if p.inserted == "after"])
+        out.append((said[0], said[-1]) if said else ("", ""))
+    return out
 
 
 def mfa_spans(audio, words_to_align: list[str], duration: float) -> list[Span]:

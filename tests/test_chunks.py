@@ -32,13 +32,13 @@ def test_function_word_categories_pair_with_a_neighbor(text):
     assert [c.members for c in result] == [[0, 1]]
 
 
-def test_ordinary_function_word_run_still_prefers_pairs():
+def test_a_function_word_run_groups_into_phrases_of_at_most_three():
     words = "I want to go to the store"
     spans = [(.2 + i * .15, .35 + i * .15) for i in range(7)]
     result = chunks(words, words, spans)
-    assert [c.text for c in result] == ["I want", "to go", "to", "the store"]
+    assert [c.text for c in result] == ["I", "want to go", "to the store"]
     assert [i for c in result for i in c.members] == list(range(7))
-    assert all(len(c.members) <= 2 for c in result)
+    assert all(len(c.members) <= 3 for c in result)
 
 
 def test_no_merging_plain_content_words_or_main_verb_have():
@@ -50,12 +50,22 @@ def test_emphasized_function_word_stays_separate():
     assert len(chunks("we CAN go", "we CAN go", [(.2, .3), (.3, .7), (.7, .95)])) == 3
 
 
-def test_main_verb_can_host_a_pronoun_and_a_quiet_slow_auxiliary_can_pair():
+def test_a_function_word_lengthened_before_a_pause_is_not_emphasis():
+    """Recorded 'kind of ... gets': 'of' was 370 ms and loud only because it preceded a 1.1 s pause."""
+    x = audio(3)
+    x[int(1.0 * SAMPLE_RATE):int(2.1 * SAMPLE_RATE)] = 0
+    result = build_chunks("kind of gets", "kind of gets".split(),
+                          [Span(.2, .63), Span(.63, 1.0), Span(2.1, 2.5)], x)
+    assert [c.text for c in result] == ["kind of", "gets"]
+    assert result[0].reason == "connected pair"
+
+
+def test_main_verb_can_host_a_pronoun_and_a_quiet_slow_auxiliary_can_join():
     assert [c.text for c in chunks("I have books", "I have books", [(.2, .35), (.35, .75), (.75, 1.)])] == ["I have", "books"]
     samples = audio()
     samples[int(.3 * SAMPLE_RATE):int(.7 * SAMPLE_RATE)] *= .1
     result = build_chunks("we can go", ["we", "can", "go"], [Span(.2, .3), Span(.3, .7), Span(.7, .95)], samples)
-    assert [c.text for c in result] == ["we", "can go"]
+    assert [c.text for c in result] == ["we can go"]
 
 
 def test_pause_inside_touching_crops_still_blocks_a_pair():
@@ -109,8 +119,8 @@ def test_connected_question_and_want_to_stay_together():
     words = "what do you want to watch"
     bounds = [(.2 + i * .15, .35 + i * .15) for i in range(6)]
     result = chunks(words + "?", words, bounds)
-    assert [c.text for c in result] == ["what do you", "want to", "watch?"]
-    assert [c.members for c in result] == [[0, 1, 2], [3, 4], [5]]
+    assert [c.text for c in result] == ["what do you", "want to watch?"]
+    assert [c.members for c in result] == [[0, 1, 2], [3, 4, 5]]
     assert result[0].span.start == pytest.approx(.2)
     assert result[0].span.end == pytest.approx(.65)
     assert len(chunks(words + "?", words, bounds, enabled=False)) == 6
@@ -142,8 +152,8 @@ def test_three_word_candidate_checks_both_internal_boundaries(boundary, barrier)
     assert all(len(c.members) < 3 for c in result)
 
 
-@pytest.mark.parametrize("emphasized", [0, 1, 2])
-def test_emphasis_on_any_member_prevents_the_three_word_group(emphasized):
+@pytest.mark.parametrize("emphasized", [1, 2])  # a long question word is a content word, not emphasis
+def test_emphasis_on_a_grammar_member_prevents_the_three_word_group(emphasized):
     bounds, start = [], .2
     for i in range(3):
         end = start + (.4 if i == emphasized else .15)
@@ -159,3 +169,26 @@ def test_three_word_exception_needs_live_words_and_respects_duration(monkeypatch
     monkeypatch.setattr("pronunciationcoach.chunks.STRONG_S", 3.)
     result = chunks("what do you", "what do you", [(.2, .75), (.75, 1.3), (1.3, 1.85)])
     assert all(len(c.members) < 3 for c in result)
+
+
+def test_linking_joins_content_words_and_its_absence_does_not():
+    bounds = [(.2, .5), (.5, .8)]
+    linked = build_chunks("pick up", ["pick", "up"], [Span(*b) for b in bounds], audio(), sounds=[("p", "k"), ("ʌ", "p")])
+    assert [c.text for c in linked] == ["pick up"] and "linked k‿ʌ" in linked[0].reason
+    plain = build_chunks("debug mode", ["debug", "mode"], [Span(*b) for b in bounds], audio(), sounds=[("d", "ɡ"), ("m", "d")])
+    assert [c.text for c in plain] == ["debug", "mode"]
+
+
+def test_a_yes_no_question_opening_can_be_three_words():
+    words = "Could it be that"
+    bounds = [(.2, .35), (.35, .45), (.45, .7), (.7, 1.)]
+    sounds = [("k", "d"), ("ɪ", "t"), ("b", "i"), ("ð", "t")]
+    result = build_chunks(words + "?", words.split(), [Span(*b) for b in bounds], audio(), sounds=sounds)
+    assert [c.text for c in result][0] == "Could it be"
+
+
+def test_a_clear_break_in_the_audio_keeps_linked_words_apart():
+    x = audio()
+    x[int(.47 * SAMPLE_RATE):int(.53 * SAMPLE_RATE)] *= .01  # 60 ms near-silence, under the pause threshold
+    result = build_chunks("pick up", ["pick", "up"], [Span(.2, .5), Span(.5, .8)], x, sounds=[("p", "k"), ("ʌ", "p")])
+    assert [c.text for c in result] == ["pick", "up"]

@@ -82,7 +82,7 @@ def audit_chunks(audio, meta, words, spans, assessment=None):
         dropped = [bool(w["phones"]) and all(p.get("dropped", False) for p in w["phones"]) and not w.get("insertions")
                    for w in meta["words"]]
         chunks = build_chunks(meta["text"], [w[0] for w in words], [Span(*s) for s in spans], audio, dropped, extra)
-    print("   PLAYBACK (usually pairs; connected question openings may use three words):")
+    print("   PLAYBACK (groups of one to three words spoken as one flow):")
     orphan = overlaps = 0
     previous_end = 0.0
     for chunk in chunks:

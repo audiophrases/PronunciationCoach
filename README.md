@@ -85,17 +85,20 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   The start search cannot reach before the preceding word's first kept spike; adjusting a shared
   boundary cannot reverse that word's crop. A final logged safety check keeps live spans ordered
   and inside the recording, without inventing audio for missing words.
-* **Short playback groups** – function words (articles, prepositions, pronouns, conjunctions and
-  helping verbs) are candidates for context: **[can you] [hear me]**, **[the store]**, **[to school]**.
-  **Pairs are the default, not a strict limit.** Compact question openings can stay together:
-  **[what do you] [want to] [watch]**, or **[how are you]**. These three-word candidates require
-  live words, weak auxiliary/pronoun cues, and no detected emphasis or internal barrier.
-  Lexical connected pairs such as *want to* take priority over a generic attachment of *to*.
-  Chunks are selected as complete groups, never by chaining pairs into a whole sentence.
-  Content words generally stay alone; grouping suggests context, not proof a reduction was heard.
-  Neighboring pair choices favor grammatical attachment; main-verb *have/do* are not automatically
-  treated as unstressed. Duration and relative loudness provide a conservative emphasis heuristic,
-  not a linguistic stress detector. Crops under 120 ms can also receive context. Punctuation,
+* **Playback groups of one to three words** – words the learner spoke as one flow play together:
+  **[can you] [hear me]**, **[kind of]**, **[what do you] [want to watch]**, **[Could it be]**.
+  Every gap between two words gets a join score from three kinds of evidence: grammar (articles,
+  prepositions, subject pronouns, conjunctions and helping verbs lean on the next word; object pronouns
+  on the one before; lexical pairs such as *want to* score highest), linking sounds from the phones as
+  pronounced (a consonant into a vowel, *kind‿of*; a shared sound, *this‿sound*; vowel to vowel), and
+  the audio (a dip over 10 dB at the join counts against it - smaller dips are normal stop closures).
+  Grammar alone or linking alone is enough; two content words with no linking stay apart. The sentence
+  is then split into groups of at most three words that keep the most joined gaps inside them; ties
+  favour shorter groups. The word lists in `chunks.py` are the app's only grammar - there is no parser.
+  Grouping suggests context, not proof a reduction was heard. Duration and relative loudness give a
+  conservative emphasis heuristic: an emphasized grammar word stands alone, but not a negative
+  (*couldn't*, stressed as a rule) or a word lengthened before a pause. Three-word groups need three
+  words that were actually said. Punctuation,
   pauses/gaps of at least 100 ms and intervening extra speech block a group; a group longer than 1.5 s
   is not formed. A barrier or cap may leave a short word alone. Missing words add no parked audio,
   and an entirely missing chunk offers only model playback. Both voices play the same word/group
