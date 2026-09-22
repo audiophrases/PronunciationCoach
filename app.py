@@ -598,8 +598,12 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
                 with gr.Row():
                     btn_you = gr.Button("▶ Whole recording", size="sm")
                     btn_model = gr.Button("▶ Whole model", size="sm")
-                player = gr.Audio(label="Now playing", autoplay=False, interactive=False, elem_id="player")
-                gr.HTML('<p id="playback-message" role="status" aria-live="polite"></p>', elem_id="playback-status")
+                # Gradio serializes arrays/files and serves their URLs; one native
+                # media element handles playback without waveform reset races.
+                player = gr.Audio(visible=False, interactive=False)
+                gr.HTML('<label for="coach-audio">Now playing</label>'
+                        '<audio id="coach-audio" aria-label="Now playing" controls preload="auto" style="width:100%"></audio>'
+                        '<p id="playback-message" role="status" aria-live="polite"></p>', elem_id="player")
                 with gr.Accordion("Playback speed", open=False):
                     speed = gr.Slider(
                         SPEED_MIN, SPEED_MAX, value=SPEED_DEFAULT, step=SPEED_STEP,
@@ -666,13 +670,17 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
     retry.click(
         lambda: (gr.update(open=True, label="Recording & sentence"), gr.update(visible=False), None),
         outputs=[setup, word_panel, player], queue=False,
-    ).then(fn=None, js="() => document.getElementById('setup')?.scrollIntoView({block: 'start', behavior: 'smooth'})")
-    close_word.click(lambda: (gr.update(visible=False), None), outputs=[word_panel, player], queue=False)
+    ).then(fn=None, js=f"() => {{ ({PLAYBACK_JS})(null); document.getElementById('setup')?.scrollIntoView({{block: 'start', behavior: 'smooth'}}); }}")
+    close_word.click(lambda: (gr.update(visible=False), None), outputs=[word_panel, player], queue=False).then(
+        fn=None, inputs=[player], js=PLAYBACK_JS)
     demo.load(fn=None, js=REVIEW_JS)
-    player.change(fn=None, inputs=[player], outputs=[], js=PLAYBACK_JS, queue=False)
-    words_hl.select(pick_word, [state, speed, voice], [word_panel, word_head, word_tips, player, state, guide_panel, sound_pick, guide_md])
+    # Explicit completion events also fire for identical cached audio. Component
+    # change events can be coalesced when a fast replay clears then restores it.
+    started.then(fn=None, js=f"() => ({PLAYBACK_JS})(null)")
+    words_hl.select(pick_word, [state, speed, voice], [word_panel, word_head, word_tips, player, state, guide_panel, sound_pick, guide_md]).then(
+        fn=None, inputs=[player], js=PLAYBACK_JS)
     sound_pick.change(pick_sound, [sound_pick, state], [guide_md])
-    # Clear the component first: identical cached audio otherwise does not retrigger autoplay.
+    # Completion runs even when the returned cached URL has not changed.
     for control, fn, inputs, outputs in [
         (btn_guide_sound, play_guide_sound, [sound_pick, state], [player]),
         (btn_guide_word, play_guide_word, [sound_pick, state], [player]),
@@ -681,8 +689,8 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
         (btn_word_you, play_word_you, [state, speed], [player, state, word_head]),
         (btn_word_model, play_word_model, [state, speed, voice], [player, state, word_head]),
     ]:
-        control.click(lambda: None, outputs=[player], queue=False, show_progress="hidden").then(
-            fn, inputs, outputs, show_progress="hidden")
+        control.click(fn, inputs, outputs, show_progress="hidden").then(
+            fn=None, inputs=[player], js=PLAYBACK_JS)
 
 if __name__ == "__main__":
     log.info(
