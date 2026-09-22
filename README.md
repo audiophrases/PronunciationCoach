@@ -63,7 +63,7 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   cropping instead; if that is unavailable too, the spike-based estimate in `boundaries.py` is.
 
   Both aligners run late against ground truth by a near-constant amount, so both subtract a
-  measured calibration offset (`OFFSET_S`, 40 ms in both `mfa.py` and `segmenter.py`).
+  measured calibration offset (`OFFSET_S`: 40 ms in `segmenter.py`; in `mfa.py` 0 ms by default and applied to word starts only - see the comment there).
   Each word's *start* is then settled with the audio as the referee (`settle_starts` in
   `pipeline.py`), because the aligner and the spikes fail in opposite ways: the aligner runs late
   on quiet onsets (a stop's closure, a fricative, *h*, a nasal) and hands them to the previous
@@ -169,13 +169,16 @@ Everything in `launchers\` is a plain `.bat` file:
 
 | File | What it does |
 | --- | --- |
-| `setup.bat` | First-time install: uv, espeak-ng, ffmpeg (via winget), Python packages, model download, test run |
+| `setup.bat` | First-time install: uv, espeak-ng, ffmpeg, cloudflared and the GitHub CLI (via winget), Python packages, the Montreal Forced Aligner, model download, test run. Safe to re-run to finish or repair a step |
 | `run_app.bat` | Starts the coach and opens it in your browser. Keep the window open; close it to stop |
 | `score_recording.bat` | Drag a recording onto it, type the sentence (or press Enter for free speech), get the phone table and heatmap |
 | `run_app_debug.bat` | Same as `run_app.bat`, plus the full per-phone table in the log and every recording archived in `recordings\` (wav + json) |
 | `open_logs.bat` | Opens `logs\app.log` (and `logs\share.log` if there is one) in Notepad and the `recordings\` folder |
 | `share.bat` | Starts the coach and shares it with students: a Cloudflare tunnel exposes it, and the fixed address `https://audiophrases.github.io/PronunciationCoach/` forwards to this session. Keeps everything like `run_app_debug.bat` does, plus a session log in `logs\share.log`. Keep the window open |
 | `stop_sharing.bat` | Ends the sharing session cleanly and marks the fixed address "closed" |
+| `compare_mfa.bat` | Realigns every archived recording with MFA and opens `tmp\mfa-review.html` to compare the crops by ear |
+
+`_env.bat` (shared settings) and `_free_port.bat` are helpers called by the others; they are not meant to be double-clicked.
 
 The app always writes one line per assessment to `logs\app.log` (mode, text, what was heard, flagged
 phones, timings) plus any errors. Archived recordings can be replayed by dragging the `.wav` onto
@@ -268,9 +271,9 @@ tested against. Until then, the app runs on the teacher's own machine.
 
 ### The MFA aligner
 
-`launchers/setup.bat` installs MFA as step 7 of 8. `launchers/setup_mfa.bat` repeats just that
-step if it failed or needs reinstalling; it is safe to re-run and takes about 6 seconds when
-everything is already in place. The coach uses MFA 3.4.2, the English acoustic model v3.1.0 and
+`launchers/setup.bat` installs MFA as step 7 of 8. If that step failed or MFA needs
+reinstalling, run `setup.bat` again: every step checks what is already there, and the MFA step
+takes about 6 seconds when everything is in place. The coach uses MFA 3.4.2, the English acoustic model v3.1.0 and
 the **US** English dictionary v3.1.0, aligning whole utterances without speaker adaptation. The
 US dictionary is used for both the American and British accent settings: it decides where word
 boundaries fall, not how a sound is judged, and the scorer keeps its own accent-specific phones.
