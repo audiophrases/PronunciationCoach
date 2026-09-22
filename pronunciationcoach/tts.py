@@ -35,6 +35,12 @@ REFERENCE_VOICES = {
     "en-gb": ["en-GB-SoniaNeural", "en-GB-RyanNeural"],
 }
 
+# Playback preference is independent of the scorer's calibrated references.
+PLAYBACK_VOICES = {
+    "en-us": ["en-US-JennyNeural", "en-US-AndrewMultilingualNeural"],
+    "en-gb": ["en-GB-SoniaNeural", "en-GB-RyanNeural"],
+}
+
 # Edge TTS rate strings for the named speeds. A number works too (1.0 = natural pace,
 # 0.95 = 5 % slower), which is what the UI's speed slider sends.
 SPEEDS = {"normal": "+0%", "slow": "-35%"}

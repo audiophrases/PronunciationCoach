@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+from collections import Counter
 from dataclasses import asdict
 import glob
 import html
@@ -33,13 +34,16 @@ def main():
     parser.add_argument("inputs", nargs="+", help="JSON files or glob patterns")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--alignment-only", action="store_true", help="skip recognizer-based crop verification")
+    parser.add_argument("--all-crops", action="store_true", help="include unchanged crops and full recordings for listening")
+    parser.add_argument("--native-references", action="store_true", help="use native scoring references, as the app does")
     args = parser.parse_args()
-    os.environ.update(PC_NATIVE_REF="0", PC_LISTENER="0" if args.alignment_only else "1",
+    os.environ.update(PC_NATIVE_REF="1" if args.native_references else "0", PC_LISTENER="0" if args.alignment_only else "1",
                       HF_HUB_OFFLINE="1", PC_CROP_RECHECK="1")
     from pronunciationcoach import SAMPLE_RATE
     from pronunciationcoach.audio import load_audio
     from pronunciationcoach.pipeline import assess
     from pronunciationcoach.playback import clip
+    from pronunciationcoach.diagnostics import runtime_snapshot
 
     paths = sorted({Path(p) for pattern in args.inputs for p in glob.glob(pattern)})
     if not paths:
@@ -53,6 +57,12 @@ def main():
             raise FileNotFoundError(f"no audio for {path}")
         audio = load_audio(audio_path)
         result = assess(audio, SAMPLE_RATE, meta["text"], meta.get("accent", "en-us"))
+        if args.all_crops:
+            buffer = io.BytesIO()
+            sf.write(buffer, audio, SAMPLE_RATE, format="WAV")
+            encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
+            pages.append(f'<h2>{html.escape(path.stem)}</h2><p>{html.escape(result.text)}</p>'
+                         f'<p>Whole recording <audio controls src="data:audio/wav;base64,{encoded}"></audio></p>')
         checks = {c.chunk: c for c in result.crop_checks}
         verified = {c.chunk: c for c in result.transcript_checks}
         truth = meta.get("truth")
@@ -73,7 +83,7 @@ def main():
                 errors.extend(pair)
                 row["metadata_error_ms"] = pair
             rows.append(row)
-            if old != new or not chunk.pad_before or not chunk.pad_after:
+            if args.all_crops or old != new or not chunk.pad_before or not chunk.pad_after:
                 players = []
                 for label, sp in (("Before", old), ("After", new)):
                     buffer = io.BytesIO()
@@ -83,11 +93,13 @@ def main():
                     sf.write(buffer, samples, SAMPLE_RATE, format="WAV")
                     encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
                     players.append(f'<p>{label} {sp.start:.3f}–{sp.end:.3f}s <audio controls src="data:audio/wav;base64,{encoded}"></audio></p>')
-                pages.append(f'<section><h2>{html.escape(path.stem)}: {html.escape(chunk.text)}</h2>' + ''.join(players) + '</section>')
+                detail = verified[ci].summary() if ci in verified else 'No transcript check'
+                pages.append(f'<section><h3>{html.escape(chunk.text)}</h3><p>{html.escape(detail)}</p>' + ''.join(players) + '</section>')
         record = {"source": str(audio_path), "text": result.text, "chunks": rows,
                   "checks": [asdict(c) for c in result.crop_checks],
                   "transcript_checks": [asdict(c) for c in result.transcript_checks],
-                  "recheck_mode": result.crop_recheck_mode, "timings": result.timings}
+                  "recheck_mode": result.crop_recheck_mode, "span_source": result.span_source,
+                  "archived_runtime": meta.get("runtime"), "timings": result.timings}
         records.append(record)
         print(f"{path.stem}: {len(result.crop_checks)} flagged; "
               f"{sum(c.status == 'trimmed' for c in result.transcript_checks)} trimmed; "
@@ -98,6 +110,7 @@ def main():
             print("  " + c.summary(), flush=True)
     summary = {"recordings": len(records), "flagged_chunks": sum(len(r["checks"]) for r in records),
                "adjusted_chunks": sum(c["status"] == "trimmed" for r in records for c in r["transcript_checks"])}
+    summary["verification_statuses"] = dict(Counter(c["status"] for r in records for c in r["transcript_checks"]))
     if errors:
         values = np.array(errors)
         summary.update(metadata_edges=len(values), metadata_mae_before_ms=float(values[:, 0].mean()),
@@ -105,10 +118,10 @@ def main():
                        metadata_improved_edges=int(np.sum(values[:, 1] < values[:, 0] - 1e-6)),
                        metadata_regressed_edges=int(np.sum(values[:, 1] > values[:, 0] + 1e-6)))
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps({"summary": summary, "recordings": records}, indent=2), encoding="utf-8")
+    args.output.write_text(json.dumps({"summary": summary, "runtime": runtime_snapshot(), "recordings": records}, indent=2), encoding="utf-8")
     args.output.with_suffix(".html").write_text('<!doctype html><meta charset="utf-8"><title>Crop recheck comparison</title>'
         '<style>body{font:18px system-ui;max-width:850px;margin:40px auto}audio{vertical-align:middle}section{border-top:1px solid #aaa}</style>'
-        '<h1>Proposed crop changes</h1><p>Original recording audio. Metadata measurements are not listening judgments.</p>'
+        '<h1>Playback crop review</h1><p>Original recording audio. Metadata measurements and recognizer transcripts are not listening judgments.</p>'
         + (''.join(pages) or '<p>No changes accepted by the conservative checks.</p>'), encoding="utf-8")
     print(json.dumps(summary, indent=2))
 

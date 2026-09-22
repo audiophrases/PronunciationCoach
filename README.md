@@ -34,7 +34,8 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   has its own ▶ You / ▶ Model buttons. One speed slider (0.5-1.5 in steps of 0.05) applies to everything
   played, so you and the model are always compared at the same pace: the model voice is synthesised at
   that rate, your own audio is time-stretched with the pitch kept (ffmpeg atempo). The model voice can
-  be male or female (Guy / Jenny for American, Ryan / Sonia for British; default `PC_VOICE=Male`).
+  be male or female (AndrewMultilingual / Jenny for American, Ryan / Sonia for British; default `PC_VOICE=Male`).
+  Playback selection is independent of the Guy / Jenny voices used for native scoring references.
   It is Microsoft Edge's neural TTS via `edge-tts` (cached in `tts_cache/`; falls back to espeak-ng
   offline). The input row is just the recorder, the sentence box and the check button; the target
   accent and model voice pickers sit with everything technical in a collapsed
@@ -107,6 +108,13 @@ audio ─┬─ Whisper ──→ words ──→ espeak-ng G2P ──→ expect
   and creates a listening page; `--alignment-only` repeats the earlier alignment-only experiment.
   Recognition matches are not a human listening evaluation, and TTS timestamps remain metadata
   proxies rather than acoustic ground truth.
+  To review every saved crop with the app's native references enabled, run
+  `uv run python scripts/recheck_compare.py "recordings/*.json" --native-references --all-crops --output tmp/recheck-review.json`
+  and open `tmp/recheck-review.html`.
+  For two-machine comparisons, run `uv run python scripts/diagnose_setup.py` on each machine
+  using the same launcher environment. New archived assessments include the same setup snapshot
+  (package versions, Git revision, model names, effective settings and ffmpeg location).
+  Compare the same WAV, sentence and settings; microphone processing can vary between machines.
 * **Speech, not dictionary words** – three things stop natural, connected speech from being
   penalised. (1) *Native reference by example*: the sentence is synthesised with two natural
   voices and run through our own recogniser, and whatever it hears a native do in that position

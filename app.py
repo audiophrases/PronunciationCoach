@@ -29,10 +29,11 @@ from pronunciationcoach.logs import DEBUG, LOG_FILE, SAVE_RECORDINGS, log_assess
 from pronunciationcoach.pipeline import assess
 from pronunciationcoach.playback import FADE_S, MAX_GAIN, PAD_AFTER_S, PAD_BEFORE_S, PAD_QUIET_DB, TARGET_PEAK, clip
 from pronunciationcoach.scoring import GOP_GOOD, GOP_UNSURE
-from pronunciationcoach.tts import REFERENCE_VOICES, synthesize
+from pronunciationcoach.tts import PLAYBACK_VOICES, synthesize
 from pronunciationcoach.viz import posterior_heatmap, timeline_figure
 
 log = setup_logging()
+PLAYBACK_JS = (Path(__file__).parent / "pronunciationcoach" / "playback.js").read_text(encoding="utf-8")
 PHONETICS = get_phonetics()  # GAPhonetics: how to make each sound (None when unavailable)
 IPA_COLORS = {"good": "#2e8b57", "unsure": "#e0a800", "off": "#c0392b"}
 
@@ -177,8 +178,7 @@ def english_ui() -> gr.I18n:
     return gr.I18n(**translations)
 
 
-# The model voice: one natural female and one male voice per accent (the same two the
-# scorer uses as native references), chosen in the teachers' section.
+# Playback voices, chosen in the teachers' section.
 VOICE_CHOICES = ["Female", "Male"]
 DEFAULT_VOICE = os.environ.get("PC_VOICE", "Male")
 if DEFAULT_VOICE not in VOICE_CHOICES:
@@ -186,7 +186,7 @@ if DEFAULT_VOICE not in VOICE_CHOICES:
 
 
 def model_voice(lang: str, choice: str) -> str:
-    female, male = REFERENCE_VOICES.get(lang, REFERENCE_VOICES["en-us"])[:2]
+    female, male = PLAYBACK_VOICES.get(lang, PLAYBACK_VOICES["en-us"])[:2]
     return male if choice == "Male" else female
 
 
@@ -598,7 +598,8 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
                 with gr.Row():
                     btn_you = gr.Button("▶ Whole recording", size="sm")
                     btn_model = gr.Button("▶ Whole model", size="sm")
-                player = gr.Audio(label="Now playing", autoplay=True, interactive=False, elem_id="player")
+                player = gr.Audio(label="Now playing", autoplay=False, interactive=False, elem_id="player")
+                gr.HTML('<p id="playback-message" role="status" aria-live="polite"></p>', elem_id="playback-status")
                 with gr.Accordion("Playback speed", open=False):
                     speed = gr.Slider(
                         SPEED_MIN, SPEED_MAX, value=SPEED_DEFAULT, step=SPEED_STEP,
@@ -668,6 +669,7 @@ with gr.Blocks(title="Pronunciation Coach") as demo:
     ).then(fn=None, js="() => document.getElementById('setup')?.scrollIntoView({block: 'start', behavior: 'smooth'})")
     close_word.click(lambda: (gr.update(visible=False), None), outputs=[word_panel, player], queue=False)
     demo.load(fn=None, js=REVIEW_JS)
+    player.change(fn=None, inputs=[player], outputs=[], js=PLAYBACK_JS, queue=False)
     words_hl.select(pick_word, [state, speed, voice], [word_panel, word_head, word_tips, player, state, guide_panel, sound_pick, guide_md])
     sound_pick.change(pick_sound, [sound_pick, state], [guide_md])
     # Clear the component first: identical cached audio otherwise does not retrigger autoplay.

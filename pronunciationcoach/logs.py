@@ -23,6 +23,7 @@ import soundfile as sf
 
 from . import SAMPLE_RATE
 from .pipeline import Assessment
+from .diagnostics import runtime_snapshot
 
 ROOT = Path(__file__).resolve().parents[1]
 LOG_DIR = ROOT / "logs"
@@ -115,6 +116,7 @@ def log_assessment(log: logging.Logger, result: Assessment, audio_16k: np.ndarra
     sf.write(stem.with_suffix(".wav"), audio_16k, SAMPLE_RATE, subtype="PCM_16")
     record = {
         "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "runtime": runtime_snapshot(),
         "text": result.text,
         "transcribed": result.transcribed,
         "accent": result.lang,
